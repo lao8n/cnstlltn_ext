@@ -1,0 +1,38 @@
+{
+  "name": "cnstlltn_ext",
+  "version": "0.1.0",
+  "description": "Chrome extension that turns YouTube videos into a GitHub-backed knowledge base.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@crxjs/vite-plugin": "^2.0.0-beta.33",
+    "@types/chrome": "^0.1.42",
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^25.9.1",
+    "@types/react": "^19.2.15",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.2",
+    "autoprefixer": "^10.5.0",
+    "postcss": "^8.5.15",
+    "tailwindcss": "^3.4.19",
+    "typescript": "^6.0.3",
+    "vite": "^8.0.14"
+  },
+  "dependencies": {
+    "@google/genai": "^2.6.0",
+    "@octokit/rest": "^22.0.1",
+    "gray-matter": "^4.0.3",
+    "js-yaml": "^4.1.1",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
+    "ulid": "^3.0.2",
+    "zod": "^4.4.3",
+    "zustand": "^5.0.13"
+  }
+}
