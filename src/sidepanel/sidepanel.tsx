@@ -1,5 +1,6 @@
 import React, { useEffect } from "react";
 import { createRoot } from "react-dom/client";
+import { ulid } from "ulid";
 import "@/index.css";
 import { getSettings } from "@/lib/storage";
 import type {
@@ -8,7 +9,12 @@ import type {
   SessionPayload,
   Settings,
 } from "@/lib/types";
-import { useStore, isSettingsComplete } from "./state";
+import {
+  useStore,
+  isSettingsComplete,
+  currentFrame,
+  type DrillFrame,
+} from "./state";
 
 async function send<T>(msg: object): Promise<T> {
   const resp = (await chrome.runtime.sendMessage(msg)) as
@@ -20,6 +26,9 @@ async function send<T>(msg: object): Promise<T> {
 
 function App() {
   const s = useStore();
+  // Closure that re-runs the last action that hit an error. Set on every
+  // catch; cleared on success. Wired to the Retry button in the error phase.
+  const retryRef = React.useRef<(() => void | Promise<void>) | null>(null);
 
   useEffect(() => {
     void bootstrap();
@@ -69,23 +78,65 @@ function App() {
         type: "GENERATE_ROOT",
         topic,
       });
-      s.setDrill(null);
-      s.setCandidates(notes);
+      s.setRootFrame(notes);
       s.setPhase("candidates");
+      retryRef.current = null;
     } catch (err) {
-      s.setError((err as Error).message);
+      retryRef.current = onGenerate;
+      s.setError(friendlyError((err as Error).message));
       s.setPhase("error");
     }
+  }
+
+  async function onDrillCandidate(candidateIdx: number) {
+    const topic = effectiveTopic(s);
+    if (!topic) return;
+    const frame = currentFrame(s);
+    if (!frame) return;
+    const parentLLM = frame.candidates[candidateIdx];
+    if (!parentLLM) return;
+    // Pre-assign a stable ULID to the parent so descendants can reference it.
+    const parentId = ulid();
+    s.setError(null);
+    s.setPhase("generating");
+    try {
+      const { notes } = await send<{ notes: LLMNote[] }>({
+        type: "GENERATE_DRILL",
+        topic,
+        parentNote: {
+          title: parentLLM.title,
+          content: parentLLM.content,
+          start_seconds: parentLLM.start_seconds,
+          end_seconds: parentLLM.end_seconds,
+        },
+      });
+      s.pushDrillFrame({
+        parent: { id: parentId, llmNote: parentLLM },
+        candidates: notes,
+        selectedIdxs: new Set<number>(),
+      });
+      s.setPhase("candidates");
+      retryRef.current = null;
+    } catch (err) {
+      retryRef.current = () => onDrillCandidate(candidateIdx);
+      s.setError(friendlyError((err as Error).message));
+      s.setPhase("error");
+    }
+  }
+
+  function onBack() {
+    if (s.drillStack.length <= 1) return;
+    s.popDrillFrame();
+    s.setError(null);
   }
 
   async function onCommit() {
     const topic = effectiveTopic(s);
     if (!topic) return;
-    const llmNotes = Array.from(s.selectedIdxs)
-      .sort((a, b) => a - b)
-      .map((i) => s.candidates[i]);
-    if (llmNotes.length === 0) {
-      s.setError("Select at least one note.");
+    if (s.drillStack.length === 0) return;
+    const notes = buildCommitNotes(s.drillStack);
+    if (notes.length === 0) {
+      s.setError("Tick at least one note to save it.");
       return;
     }
     s.setError(null);
@@ -95,51 +146,23 @@ function App() {
         type: "COMMIT_NOTES",
         topic,
         topicTitle: s.isNewTopic ? s.newTopicTitle.trim() || topic : null,
-        isNewTopic: s.isNewTopic && s.drill === null,
-        includeTranscript: s.drill === null,
-        llmNotes,
-        parents: s.drill ? [s.drill.parentId] : [],
+        isNewTopic: s.isNewTopic,
+        includeTranscript: true,
+        notes,
       });
       s.setCommittedRefs(result.noteRefs);
       s.setLastCommitUrl(result.url);
       s.setPhase("committed");
+      retryRef.current = null;
       try {
-        const notes = await send<{ id: string; title: string; path: string }[]>({
-          type: "LIST_NOTES_FOR_TOPIC",
-          topic,
-        });
-        s.setNotesForTopic(notes);
+        const allNotes = await send<{ id: string; title: string; path: string }[]>(
+          { type: "LIST_NOTES_FOR_TOPIC", topic },
+        );
+        s.setNotesForTopic(allNotes);
       } catch {}
     } catch (err) {
-      s.setError((err as Error).message);
-      s.setPhase("error");
-    }
-  }
-
-  async function onDrill(parent: {
-    id: string;
-    title: string;
-    content: string;
-  }) {
-    const topic = effectiveTopic(s);
-    if (!topic) return;
-    s.setError(null);
-    s.setPhase("generating");
-    try {
-      const { notes } = await send<{ notes: LLMNote[] }>({
-        type: "GENERATE_DRILL",
-        topic,
-        parentNote: { title: parent.title, content: parent.content },
-      });
-      s.setDrill({
-        parentId: parent.id,
-        parentTitle: parent.title,
-        parentContent: parent.content,
-      });
-      s.setCandidates(notes);
-      s.setPhase("candidates");
-    } catch (err) {
-      s.setError((err as Error).message);
+      retryRef.current = onCommit;
+      s.setError(friendlyError((err as Error).message));
       s.setPhase("error");
     }
   }
@@ -158,7 +181,17 @@ function App() {
 
   return (
     <div className="p-4 max-w-xl mx-auto text-sm space-y-4">
-      <Header />
+      <div className="flex justify-between items-center -mb-2">
+        <span className="text-xs opacity-60">
+          {s.settings?.model ? `model: ${s.settings.model}` : ""}
+        </span>
+        <button
+          className="text-xs underline opacity-70"
+          onClick={() => chrome.runtime.openOptionsPage()}
+        >
+          settings
+        </button>
+      </div>
       {s.errorMessage && (
         <div className="rounded bg-rose-100 text-rose-900 dark:bg-rose-950 dark:text-rose-100 px-3 py-2">
           {s.errorMessage}
@@ -169,7 +202,7 @@ function App() {
 
       {s.phase === "no-settings" && (
         <div className="space-y-2">
-          <p>You need to configure Notetaker first.</p>
+          <p>You need to configure cnstlltn first.</p>
           <button
             className="nt-btn"
             onClick={() => chrome.runtime.openOptionsPage()}
@@ -183,7 +216,7 @@ function App() {
         <div className="space-y-2">
           <p>
             No active video. Go to a YouTube watch page and click the 📝
-            Notetaker button.
+            cnstlltn button.
           </p>
         </div>
       )}
@@ -198,12 +231,10 @@ function App() {
         <TopicPicker
           topics={s.topics}
           selectedTopic={s.selectedTopic}
-          isNewTopic={s.isNewTopic}
           newTopicTitle={s.newTopicTitle}
           onPick={(t) => s.pickTopic(t)}
           onSetIsNew={(b) => s.setIsNewTopic(b)}
           onChangeNewTitle={(t) => s.setNewTopicTitle(t)}
-          onChangeNewSlug={(slug) => s.pickTopic(slug)}
           onGenerate={onGenerate}
         />
       )}
@@ -214,16 +245,15 @@ function App() {
         </div>
       )}
 
-      {s.phase === "candidates" && (
+      {s.phase === "candidates" && currentFrame(s) && (
         <CandidateList
-          drill={s.drill}
-          candidates={s.candidates}
-          selectedIdxs={s.selectedIdxs}
+          stack={s.drillStack}
           onToggle={(i) => s.toggleSelected(i)}
+          onDrillCandidate={onDrillCandidate}
+          onBack={onBack}
           onCommit={onCommit}
           onCancel={() => {
-            s.setCandidates([]);
-            s.setDrill(null);
+            s.clearStack();
             s.setPhase("topic-picker");
           }}
         />
@@ -235,8 +265,6 @@ function App() {
         <CommittedView
           refs={s.committedRefs}
           url={s.lastCommitUrl}
-          notesForTopic={s.notesForTopic}
-          onDrill={onDrill}
           onAnother={async () => {
             s.resetForNewBatch();
             await refreshNotesForTopic();
@@ -245,33 +273,33 @@ function App() {
       )}
 
       {s.phase === "error" && (
-        <button
-          className="nt-btn"
-          onClick={() => {
-            s.setError(null);
-            s.setPhase("topic-picker");
-          }}
-        >
-          Back
-        </button>
+        <div className="flex gap-2">
+          {retryRef.current && (
+            <button
+              className="nt-btn nt-btn-primary"
+              onClick={() => {
+                const fn = retryRef.current;
+                if (fn) void fn();
+              }}
+            >
+              Retry
+            </button>
+          )}
+          <button
+            className="nt-btn"
+            onClick={() => {
+              s.setError(null);
+              retryRef.current = null;
+              s.setPhase("topic-picker");
+            }}
+          >
+            Back
+          </button>
+        </div>
       )}
 
       <Styles />
     </div>
-  );
-}
-
-function Header() {
-  return (
-    <header className="flex items-center justify-between">
-      <h1 className="font-semibold text-base">📝 Notetaker</h1>
-      <button
-        className="text-xs underline opacity-70"
-        onClick={() => chrome.runtime.openOptionsPage()}
-      >
-        settings
-      </button>
-    </header>
   );
 }
 
@@ -291,63 +319,68 @@ function VideoCard({ session }: { session: SessionPayload | null }) {
 function TopicPicker(props: {
   topics: string[];
   selectedTopic: string;
-  isNewTopic: boolean;
   newTopicTitle: string;
   onPick: (slug: string) => void;
   onSetIsNew: (b: boolean) => void;
   onChangeNewTitle: (t: string) => void;
-  onChangeNewSlug: (slug: string) => void;
   onGenerate: () => void;
 }) {
+  const hasNewTitle = props.newTopicTitle.trim().length > 0;
   return (
     <div className="space-y-3">
-      <div className="space-y-1">
-        <label className="block text-xs font-medium opacity-80">Topic</label>
-        {props.topics.length > 0 && !props.isNewTopic && (
+      {props.topics.length > 0 && (
+        <div className="space-y-1">
+          <label className="block text-xs font-medium opacity-80">
+            Pick existing topic
+          </label>
           <select
             className="nt-input"
-            value={props.selectedTopic}
+            value={hasNewTitle ? "" : props.selectedTopic}
             onChange={(e) => {
-              if (e.target.value === "__new__") props.onSetIsNew(true);
-              else props.onPick(e.target.value);
+              const v = e.target.value;
+              if (v) {
+                // Picking an existing topic clears the new-title input
+                props.onChangeNewTitle("");
+                props.onSetIsNew(false);
+                props.onPick(v);
+              }
             }}
           >
-            <option value="" disabled>
-              — pick a topic —
-            </option>
+            <option value="">— pick a topic —</option>
             {props.topics.map((t) => (
               <option key={t} value={t}>
                 {t}
               </option>
             ))}
-            <option value="__new__">+ create new topic</option>
           </select>
-        )}
-        {(props.topics.length === 0 || props.isNewTopic) && (
-          <div className="space-y-2">
-            <input
-              className="nt-input"
-              placeholder="Topic title (e.g. Iran-Israel war)"
-              value={props.newTopicTitle}
-              onChange={(e) => {
-                props.onChangeNewTitle(e.target.value);
-                props.onChangeNewSlug(slugify(e.target.value));
-                props.onSetIsNew(true);
-              }}
-            />
-            <div className="text-xs opacity-60">
-              slug: <code>{props.selectedTopic || "—"}</code>
-            </div>
-            {props.topics.length > 0 && (
-              <button
-                className="text-xs underline opacity-70"
-                onClick={() => props.onSetIsNew(false)}
-              >
-                pick existing instead
-              </button>
-            )}
-          </div>
-        )}
+        </div>
+      )}
+      <div className="space-y-1">
+        <label className="block text-xs font-medium opacity-80">
+          {props.topics.length > 0 ? "Or create a new topic" : "New topic"}
+        </label>
+        <input
+          className="nt-input"
+          placeholder="Topic title (e.g. Iran-Israel war)"
+          value={props.newTopicTitle}
+          onChange={(e) => {
+            props.onChangeNewTitle(e.target.value);
+            props.onSetIsNew(e.target.value.trim().length > 0);
+          }}
+        />
+        {(() => {
+          const newSlug = slugify(props.newTopicTitle);
+          if (!newSlug) return null;
+          if (props.topics.includes(newSlug)) {
+            return (
+              <div className="text-xs text-amber-700 dark:text-amber-300">
+                ⚠ A topic <code>{newSlug}</code> already exists — notes will be
+                added to it. Pick it from the dropdown above to confirm.
+              </div>
+            );
+          }
+          return null;
+        })()}
       </div>
       <button
         className="nt-btn nt-btn-primary w-full"
@@ -360,69 +393,91 @@ function TopicPicker(props: {
 }
 
 function CandidateList(props: {
-  drill: { parentTitle: string } | null;
-  candidates: LLMNote[];
-  selectedIdxs: Set<number>;
+  stack: DrillFrame[];
   onToggle: (i: number) => void;
+  onDrillCandidate: (i: number) => void;
+  onBack: () => void;
   onCommit: () => void;
   onCancel: () => void;
 }) {
+  const frame = props.stack[props.stack.length - 1];
+  const depth = props.stack.length - 1; // 0 = root
+  const totalSelected = props.stack.reduce(
+    (n, f) => n + f.selectedIdxs.size,
+    0,
+  );
+
   return (
     <div className="space-y-3">
-      {props.drill && (
-        <div className="text-xs opacity-70">
-          Drilling into: <span className="font-medium">{props.drill.parentTitle}</span>
+      {depth > 0 && (
+        <div className="space-y-1">
+          <button
+            className="text-xs underline opacity-80 hover:opacity-100"
+            onClick={props.onBack}
+          >
+            ← back
+          </button>
+          <Breadcrumb stack={props.stack} />
         </div>
       )}
       <ul className="space-y-2">
-        {props.candidates.map((n, i) => (
-          <li
-            key={i}
-            className="rounded border border-slate-300 dark:border-slate-700 px-3 py-2"
-          >
-            <label className="flex gap-2 items-start cursor-pointer">
-              <input
-                type="checkbox"
-                checked={props.selectedIdxs.has(i)}
-                onChange={() => props.onToggle(i)}
-                className="mt-1"
-              />
-              <div className="flex-1 min-w-0 space-y-1">
+        {frame.candidates.map((n, i) => {
+          const selected = frame.selectedIdxs.has(i);
+          return (
+            <li
+              key={i}
+              role="button"
+              tabIndex={0}
+              onClick={() => props.onToggle(i)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  props.onToggle(i);
+                }
+              }}
+              className={
+                "relative rounded border px-3 py-2 pr-9 cursor-pointer transition-colors " +
+                (selected
+                  ? "bg-slate-900 text-slate-50 border-slate-900 dark:bg-slate-100 dark:text-slate-900 dark:border-slate-100"
+                  : "border-slate-300 hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800")
+              }
+            >
+              <div className="space-y-1">
                 <div className="font-medium">{n.title}</div>
-                <div className="text-xs opacity-80 whitespace-pre-wrap">{n.content}</div>
-                <div className="text-xs opacity-60 flex flex-wrap gap-1">
-                  <span>{n.claim_type}</span>
-                  <span>·</span>
-                  <span>
-                    {formatTs(n.start_seconds)} – {formatTs(n.end_seconds)}
-                  </span>
-                  {n.flag && (
-                    <>
-                      <span>·</span>
-                      <span className="text-amber-700 dark:text-amber-300">
-                        more detail
-                      </span>
-                    </>
-                  )}
-                  {n.tags.length > 0 && (
-                    <>
-                      <span>·</span>
-                      <span>{n.tags.join(", ")}</span>
-                    </>
-                  )}
+                <div className="text-xs opacity-80 whitespace-pre-wrap">
+                  {n.content}
+                </div>
+                <div className="text-xs opacity-60">
+                  {n.claim_type} · {formatTs(n.start_seconds)} – {formatTs(n.end_seconds)}
                 </div>
               </div>
-            </label>
-          </li>
-        ))}
+              <button
+                aria-label="Drill into this note"
+                title="Drill into this note"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  props.onDrillCandidate(i);
+                }}
+                className={
+                  "absolute top-1.5 right-2 text-lg font-semibold leading-none px-1 rounded " +
+                  (selected
+                    ? "text-slate-50 hover:bg-slate-700 dark:text-slate-900 dark:hover:bg-slate-300"
+                    : "opacity-60 hover:opacity-100 hover:bg-slate-200 dark:hover:bg-slate-700")
+                }
+              >
+                ›
+              </button>
+            </li>
+          );
+        })}
       </ul>
-      <div className="flex gap-2">
+      <div className="flex gap-2 items-center">
         <button
           className="nt-btn nt-btn-primary"
           onClick={props.onCommit}
-          disabled={props.selectedIdxs.size === 0}
+          disabled={totalSelected === 0}
         >
-          Commit {props.selectedIdxs.size} selected
+          Commit {totalSelected}
         </button>
         <button className="nt-btn" onClick={props.onCancel}>
           Cancel
@@ -432,15 +487,30 @@ function CandidateList(props: {
   );
 }
 
+function Breadcrumb({ stack }: { stack: DrillFrame[] }) {
+  const parents = stack
+    .map((f) => f.parent?.llmNote.title)
+    .filter((t): t is string => !!t);
+  if (parents.length === 0) return null;
+  return (
+    <div className="text-xs opacity-70 truncate">
+      {parents.map((t, i) => (
+        <span key={i}>
+          {i > 0 && " › "}
+          <span className={i === parents.length - 1 ? "font-medium" : ""}>
+            {t}
+          </span>
+        </span>
+      ))}
+    </div>
+  );
+}
+
 function CommittedView(props: {
   refs: { id: string; title: string }[];
   url: string | null;
-  notesForTopic: { id: string; title: string; path: string }[];
-  onDrill: (n: { id: string; title: string; content: string }) => void;
   onAnother: () => void;
 }) {
-  const [drillIdx, setDrillIdx] = React.useState<string>("");
-  const all = props.notesForTopic;
   return (
     <div className="space-y-3">
       <div className="rounded bg-emerald-100 text-emerald-900 dark:bg-emerald-950 dark:text-emerald-100 px-3 py-2">
@@ -458,60 +528,100 @@ function CommittedView(props: {
           </a>
         )}
       </div>
-
-      {all.length > 0 && (
-        <div className="space-y-2">
-          <label className="block text-xs font-medium opacity-80">
-            Drill into an existing note for this topic
-          </label>
-          <select
-            className="nt-input"
-            value={drillIdx}
-            onChange={(e) => setDrillIdx(e.target.value)}
-          >
-            <option value="">— pick a note —</option>
-            {all.map((n) => (
-              <option key={n.id} value={n.id}>
-                {n.title}
-              </option>
-            ))}
-          </select>
-          <button
-            className="nt-btn"
-            disabled={!drillIdx}
-            onClick={async () => {
-              const picked = all.find((n) => n.id === drillIdx);
-              if (!picked) return;
-              const content = await fetchNoteContent(picked.path).catch(() => "");
-              props.onDrill({
-                id: picked.id,
-                title: picked.title,
-                content,
-              });
-            }}
-          >
-            Drill into selected
-          </button>
-        </div>
-      )}
-
       <button className="nt-btn" onClick={props.onAnother}>
-        Start another batch (new topic or same)
+        Start another batch
       </button>
     </div>
   );
 }
 
-async function fetchNoteContent(path: string): Promise<string> {
-  // Side panel can't fetch GitHub directly without auth — defer to background later.
-  // For now we just send title+empty content as the drill seed; the LLM still
-  // uses the full transcript so this is sufficient for v1.
-  return "";
-}
-
 function effectiveTopic(s: ReturnType<typeof useStore.getState>): string {
   if (s.isNewTopic) return slugify(s.newTopicTitle || s.selectedTopic);
   return s.selectedTopic;
+}
+
+// Walk the drill stack and produce the flat list of notes to commit.
+// Each ticked candidate becomes a commit note. Its `parents` is set to the
+// nearest ticked ancestor on the drill chain (or [] if none ticked above).
+// IDs are stable across drilled-into candidates: if you tick the same note
+// you also drilled into, the saved note's ID matches its descendants' parents.
+function buildCommitNotes(
+  stack: DrillFrame[],
+): Array<{ id: string; llmNote: LLMNote; parents: string[] }> {
+  // Map: candidate LLMNote reference → its committed ID
+  const idForCandidate = new Map<LLMNote, string>();
+  // Pre-populate IDs for drilled-into candidates (already have pre-assigned IDs)
+  for (let d = 1; d < stack.length; d++) {
+    const parent = stack[d].parent;
+    if (parent) idForCandidate.set(parent.llmNote, parent.id);
+  }
+
+  const result: Array<{ id: string; llmNote: LLMNote; parents: string[] }> = [];
+
+  for (let d = 0; d < stack.length; d++) {
+    const frame = stack[d];
+    const idxs = Array.from(frame.selectedIdxs).sort((a, b) => a - b);
+    for (const idx of idxs) {
+      const llmNote = frame.candidates[idx];
+      const id = idForCandidate.get(llmNote) ?? ulid();
+      if (!idForCandidate.has(llmNote)) idForCandidate.set(llmNote, id);
+
+      // Find nearest ticked ancestor in the drill chain.
+      let parentId: string | null = null;
+      for (let p = d - 1; p >= 0; p--) {
+        const drilledInto = stack[p + 1]?.parent;
+        if (!drilledInto) continue;
+        const idxInP = stack[p].candidates.indexOf(drilledInto.llmNote);
+        if (idxInP >= 0 && stack[p].selectedIdxs.has(idxInP)) {
+          parentId = drilledInto.id;
+          break;
+        }
+      }
+
+      result.push({
+        id,
+        llmNote,
+        parents: parentId ? [parentId] : [],
+      });
+    }
+  }
+  return result;
+}
+
+// Convert raw provider errors into something the user can act on.
+function friendlyError(msg: string): string {
+  // Try to extract JSON error body (Gemini returns these as JSON-in-Error)
+  const jsonMatch = msg.match(/\{[\s\S]*\}/);
+  if (jsonMatch) {
+    try {
+      const obj = JSON.parse(jsonMatch[0]);
+      const code = obj?.error?.code;
+      const status = obj?.error?.status;
+      if (code === 429 || status === "RESOURCE_EXHAUSTED") {
+        if (/gemini-2\.5-pro/.test(msg)) {
+          return "Gemini Pro quota exceeded. Switch model to gemini-2.5-flash in Settings (free tier).";
+        }
+        return "Gemini quota exceeded — retry in a minute, or switch to a different model in Settings.";
+      }
+      if (code === 503 || status === "UNAVAILABLE") {
+        return "Gemini is busy right now. Hit Retry — usually clears in a few seconds.";
+      }
+      if (code === 500 || status === "INTERNAL") {
+        return "Gemini hit an internal error. Hit Retry, or try again in a moment.";
+      }
+      if (code === 401 || code === 403) {
+        return "Gemini rejected the API key. Check it in Settings.";
+      }
+    } catch {}
+  }
+  // GitHub error patterns
+  if (/Bad credentials|401/i.test(msg)) {
+    return "GitHub PAT rejected. Update it in Settings.";
+  }
+  if (/Not Found.*repos/i.test(msg)) {
+    return "GitHub repo not found, or your PAT doesn't have access to it.";
+  }
+  return msg.length > 200 ? msg.slice(0, 200) + "…" : msg;
 }
 
 function slugify(input: string): string {

@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 export const SCHEMA_VERSION = 1;
-export const DEFAULT_MODEL = "gemini-2.5-pro";
+export const DEFAULT_MODEL = "gemini-2.5-flash";
 
 export const ClaimType = z.enum([
   "argument",
@@ -126,7 +126,12 @@ export type Msg =
   | {
       type: "GENERATE_DRILL";
       topic: string;
-      parentNote: { title: string; content: string };
+      parentNote: {
+        title: string;
+        content: string;
+        start_seconds: number;
+        end_seconds: number;
+      };
     }
   | {
       type: "COMMIT_NOTES";
@@ -134,8 +139,10 @@ export type Msg =
       topicTitle: string | null;
       isNewTopic: boolean;
       includeTranscript: boolean;
-      llmNotes: LLMNote[];
-      parents: string[];
+      // Flat list of notes to commit. Each carries its own pre-assigned ULID
+      // and an explicit `parents` chain. The side panel decides which notes
+      // to send — drill ancestors are NOT auto-included.
+      notes: { id: string; llmNote: LLMNote; parents: string[] }[];
     }
   | { type: "TEST_CONNECTION" }
   | { type: "CREATE_REPO" };

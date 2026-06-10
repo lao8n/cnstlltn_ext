@@ -6,7 +6,6 @@ import {
   buildFrontmatter,
   buildSourceMd,
   buildTopicMd,
-  newId,
   serialiseNote,
   sha256Hex,
 } from "@/lib/note";
@@ -21,6 +20,19 @@ chrome.runtime.onInstalled.addListener(() => {
 
 chrome.runtime.onMessage.addListener((rawMsg, sender, sendResponse) => {
   const msg = rawMsg as Msg;
+  // OPEN_SIDE_PANEL must call chrome.sidePanel.open() *synchronously* from a
+  // user-gesture-bearing message, otherwise Chrome rejects it. So we don't
+  // route it through the async `handle()` chain.
+  if (msg.type === "OPEN_SIDE_PANEL") {
+    const tabId = sender.tab?.id ?? (msg as { tabId?: number }).tabId;
+    if (tabId != null) {
+      chrome.sidePanel
+        .open({ tabId })
+        .catch((err) => console.error("sidePanel.open failed", err));
+    }
+    sendResponse({ ok: true, result: { opened: tabId != null } });
+    return false;
+  }
   void handle(msg, sender)
     .then((result) => sendResponse({ ok: true, result }))
     .catch((err: Error) => {
@@ -35,7 +47,9 @@ async function handle(msg: Msg, sender: chrome.runtime.MessageSender) {
     case "TRANSCRIPT_READY":
       return onTranscriptReady(msg.payload, sender);
     case "OPEN_SIDE_PANEL":
-      return openSidePanel(msg.tabId);
+      // Handled synchronously above; this branch only runs if open() was
+      // called via the async path (which shouldn't happen).
+      return { opened: false };
     case "GET_SESSION":
       return getSession<SessionPayload>();
     case "LIST_TOPICS":
@@ -57,21 +71,13 @@ async function handle(msg: Msg, sender: chrome.runtime.MessageSender) {
 
 async function onTranscriptReady(
   payload: SessionPayload,
-  sender: chrome.runtime.MessageSender,
+  _sender: chrome.runtime.MessageSender,
 ) {
+  // Side panel was already opened synchronously by the OPEN_SIDE_PANEL message
+  // dispatched at the start of the FAB click handler. Just store the session;
+  // the side panel listens to chrome.storage.session and picks it up.
   await setSession<SessionPayload>(payload);
-  if (sender.tab?.id != null) {
-    await openSidePanel(sender.tab.id);
-  }
   return { ok: true };
-}
-
-async function openSidePanel(tabId: number) {
-  try {
-    await chrome.sidePanel.open({ tabId });
-  } catch (err) {
-    console.error("sidePanel.open failed", err);
-  }
 }
 
 async function runGenerateRoot(topic: string) {
@@ -87,7 +93,12 @@ async function runGenerateRoot(topic: string) {
 
 async function runGenerateDrill(
   topic: string,
-  parentNote: { title: string; content: string },
+  parentNote: {
+    title: string;
+    content: string;
+    start_seconds: number;
+    end_seconds: number;
+  },
 ) {
   const session = await getSession<SessionPayload>();
   if (!session) throw new Error("No active transcript session.");
@@ -97,6 +108,8 @@ async function runGenerateDrill(
     channel: session.videoMeta.channel,
     parentTitle: parentNote.title,
     parentContent: parentNote.content,
+    parentStartSeconds: parentNote.start_seconds,
+    parentEndSeconds: parentNote.end_seconds,
   });
   return { topic, notes };
 }
@@ -104,8 +117,8 @@ async function runGenerateDrill(
 async function runCommit(msg: Extract<Msg, { type: "COMMIT_NOTES" }>) {
   const session = await getSession<SessionPayload>();
   if (!session) throw new Error("No active transcript session.");
-  if (msg.llmNotes.length === 0) {
-    throw new Error("Nothing selected to commit.");
+  if (msg.notes.length === 0) {
+    throw new Error("Nothing to commit.");
   }
 
   const files: FileToCommit[] = [];
@@ -113,9 +126,14 @@ async function runCommit(msg: Extract<Msg, { type: "COMMIT_NOTES" }>) {
   const kbConfig = await github.ensureKbConfig();
   if (kbConfig) files.push(kbConfig);
 
-  if (msg.isNewTopic) {
+  // Only create topic.md if it doesn't already exist. Guards against the
+  // case where the user typed a "new" topic title whose slug collides with
+  // an existing topic — clobbering an existing topic.md would lose any
+  // hand-curated main_arguments / scope.
+  const topicMdPath = KB_PATHS.topicMd(msg.topic);
+  if (msg.isNewTopic && !(await github.pathExists(topicMdPath))) {
     files.push({
-      path: KB_PATHS.topicMd(msg.topic),
+      path: topicMdPath,
       content: buildTopicMd({
         topicSlug: msg.topic,
         topicTitle: msg.topicTitle ?? msg.topic,
@@ -142,27 +160,29 @@ async function runCommit(msg: Extract<Msg, { type: "COMMIT_NOTES" }>) {
     });
   }
 
-  for (const llmNote of msg.llmNotes) {
-    const id = newId();
-    const contentHash = await sha256Hex(llmNote.content);
+  for (const note of msg.notes) {
+    const contentHash = await sha256Hex(note.llmNote.content);
     const fm = buildFrontmatter({
-      id,
+      id: note.id,
       topic: msg.topic,
-      llmNote,
+      llmNote: note.llmNote,
       video: session.videoMeta,
-      parents: msg.parents,
+      parents: note.parents,
       model: DEFAULT_MODEL,
       contentHash,
     });
-    const content = serialiseNote(fm, llmNote.content);
     files.push({
-      path: KB_PATHS.noteFile(msg.topic, id, llmNote.title),
-      content,
-      noteRef: { id, title: llmNote.title },
+      path: KB_PATHS.noteFile(msg.topic, note.id, note.llmNote.title),
+      content: serialiseNote(fm, note.llmNote.content),
+      noteRef: { id: note.id, title: note.llmNote.title },
     });
   }
 
-  const commitMessage = buildCommitMessage(msg.topic, msg.llmNotes, session.videoMeta.title);
+  const commitMessage = buildCommitMessage(
+    msg.topic,
+    msg.notes.length,
+    session.videoMeta.title,
+  );
 
   return github.commitFiles({
     files,
@@ -172,10 +192,10 @@ async function runCommit(msg: Extract<Msg, { type: "COMMIT_NOTES" }>) {
 
 function buildCommitMessage(
   topic: string,
-  notes: LLMNote[],
+  noteCount: number,
   videoTitle: string,
 ): string {
   const truncated =
     videoTitle.length > 60 ? videoTitle.slice(0, 57) + "..." : videoTitle;
-  return `notes(${topic}): add ${notes.length} note${notes.length === 1 ? "" : "s"} from "${truncated}"`;
+  return `notes(${topic}): add ${noteCount} note${noteCount === 1 ? "" : "s"} from "${truncated}"`;
 }

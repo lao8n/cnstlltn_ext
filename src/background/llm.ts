@@ -23,6 +23,7 @@ Rules:
 - Produce 3-8 sub-notes that each cover detail the parent note compresses or omits.
 - Sub-notes obey the same atomicity and formatting rules as the original notes (plain prose, no headings, no bullet prefixes, direct quotes when sharp).
 - Sub-note start/end seconds reference the original transcript.
+- HARD CONSTRAINT: every sub-note's [start_seconds, end_seconds] must fall within the parent's range. Siblings may overlap each other but must all sit inside the parent's window.
 - flag is true if a sub-note itself has more detail in the transcript worth drilling into further.
 - Do not restate the parent note. Each sub-note must add something the parent does not already say.`;
 
@@ -129,9 +130,20 @@ export async function generateDrillNotes(args: {
   channel: string;
   parentTitle: string;
   parentContent: string;
+  parentStartSeconds: number;
+  parentEndSeconds: number;
 }): Promise<LLMNote[]> {
   const { model } = await getSettings();
-  const transcriptText = cuesToPromptText(args.cues);
+  // Slice the transcript to the parent's window (with a small buffer) so the
+  // model focuses on the relevant span and so we save tokens.
+  const sliceStart = Math.max(0, args.parentStartSeconds - 5);
+  const sliceEnd = args.parentEndSeconds + 5;
+  const slicedCues = args.cues.filter(
+    (c) => c.endSeconds >= sliceStart && c.startSeconds <= sliceEnd,
+  );
+  const transcriptText = cuesToPromptText(
+    slicedCues.length ? slicedCues : args.cues,
+  );
   const userPrompt = `Video title: ${args.videoTitle}
 Channel: ${args.channel}
 
@@ -139,7 +151,9 @@ Parent note title: ${args.parentTitle}
 Parent note body:
 ${args.parentContent}
 
-Full transcript (for reference):
+Parent time range: [${args.parentStartSeconds}, ${args.parentEndSeconds}] seconds. Every sub-note's start_seconds and end_seconds MUST fall inside this range.
+
+Transcript slice covering the parent's window:
 ${transcriptText}
 
 Produce sub-notes drilling into the parent, following the rules in the system message.`;

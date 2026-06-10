@@ -3,13 +3,13 @@ import pkg from "../package.json";
 
 export default defineManifest({
   manifest_version: 3,
-  name: "Notetaker",
-  short_name: "Notetaker",
+  name: "cnstlltn",
+  short_name: "cnstlltn",
   description:
     "Generate notes from YouTube transcripts via an LLM and commit them to your GitHub knowledge base.",
   version: pkg.version,
   action: {
-    default_title: "Open Notetaker side panel",
+    default_title: "Open cnstlltn side panel",
   },
   background: {
     service_worker: "src/background/index.ts",
@@ -21,6 +21,16 @@ export default defineManifest({
       js: ["src/content/youtube.ts"],
       run_at: "document_idle",
     },
+    // Main-world script so it can read window.ytInitialPlayerResponse;
+      // crxjs's type doesn't include `world` yet, hence the cast.
+    {
+      matches: ["*://*.youtube.com/*"],
+      js: ["src/content/yt-main.ts"],
+      run_at: "document_idle",
+      world: "MAIN",
+    } as chrome.runtime.ManifestV3["content_scripts"] extends (infer U)[]
+      ? U
+      : never,
   ],
   side_panel: {
     default_path: "src/sidepanel/sidepanel.html",

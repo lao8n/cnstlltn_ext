@@ -11,6 +11,22 @@ function getVideoId(): string | null {
   return new URLSearchParams(location.search).get("v");
 }
 
+interface EngagementPanel {
+  engagementPanelSectionListRenderer?: {
+    targetId?: string;
+    panelIdentifier?: string;
+    content?: {
+      continuationItemRenderer?: {
+        continuationEndpoint?: {
+          getTranscriptEndpoint?: {
+            params?: string;
+          };
+        };
+      };
+    };
+  };
+}
+
 interface PlayerResponse {
   videoDetails?: {
     videoId?: string;
@@ -27,40 +43,162 @@ interface PlayerResponse {
       }[];
     };
   };
+  engagementPanels?: EngagementPanel[];
 }
 
-function readPlayerResponseFromPage(): Promise<PlayerResponse | null> {
+interface MainWorldPayload {
+  playerResponse: PlayerResponse | null;
+  innertubeContext: unknown;
+  innertubeApiKey: string | null;
+}
+
+function readMainWorldPayload(): Promise<MainWorldPayload | null> {
   return new Promise((resolve) => {
     const token = `__notetaker_${Math.random().toString(36).slice(2)}`;
 
     const onMessage = (ev: MessageEvent) => {
       if (ev.source !== window) return;
       const data = ev.data;
-      if (!data || data.token !== token) return;
+      if (
+        !data ||
+        data.type !== "NOTETAKER_PLAYER_RESPONSE" ||
+        data.token !== token
+      ) {
+        return;
+      }
       window.removeEventListener("message", onMessage);
-      resolve(data.payload ?? null);
+      resolve((data.payload as MainWorldPayload) ?? null);
     };
     window.addEventListener("message", onMessage);
 
-    const script = document.createElement("script");
-    script.textContent = `
-      (function(){
-        try {
-          var pr = window.ytInitialPlayerResponse || null;
-          window.postMessage({ token: ${JSON.stringify(token)}, payload: pr }, '*');
-        } catch (e) {
-          window.postMessage({ token: ${JSON.stringify(token)}, payload: null }, '*');
-        }
-      })();
-    `;
-    (document.head || document.documentElement).appendChild(script);
-    script.remove();
+    window.postMessage(
+      { type: "NOTETAKER_REQUEST_PLAYER_RESPONSE", token },
+      "*",
+    );
 
     setTimeout(() => {
       window.removeEventListener("message", onMessage);
       resolve(null);
     }, 1500);
   });
+}
+
+// Build the `params` blob YouTube's get_transcript endpoint expects when the
+// engagement panel isn't in the player response. The blob is a protobuf:
+//   message { 1: { 1: <videoId> } }
+// then base64url-encoded.
+function makeTranscriptParams(videoId: string): string {
+  const idBytes = new TextEncoder().encode(videoId);
+  if (idBytes.length > 127) throw new Error("video ID too long");
+  // Inner: field 1, wire type 2 (len-delim): [0x0a, len, ...idBytes]
+  const inner = new Uint8Array(2 + idBytes.length);
+  inner[0] = 0x0a;
+  inner[1] = idBytes.length;
+  inner.set(idBytes, 2);
+  // Outer wrap: field 1, wire type 2 around inner
+  if (inner.length > 127) throw new Error("inner params too long");
+  const outer = new Uint8Array(2 + inner.length);
+  outer[0] = 0x0a;
+  outer[1] = inner.length;
+  outer.set(inner, 2);
+  let bin = "";
+  for (const b of outer) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function findTranscriptParams(playerResp: PlayerResponse | null): string | null {
+  const panels = playerResp?.engagementPanels ?? [];
+  for (const panel of panels) {
+    const r = panel.engagementPanelSectionListRenderer;
+    if (!r) continue;
+    const id = (r.targetId ?? r.panelIdentifier ?? "").toLowerCase();
+    if (!id.includes("transcript")) continue;
+    const params =
+      r.content?.continuationItemRenderer?.continuationEndpoint
+        ?.getTranscriptEndpoint?.params;
+    if (params) return params;
+  }
+  return null;
+}
+
+interface InnertubeTranscriptResponse {
+  actions?: {
+    updateEngagementPanelAction?: {
+      content?: {
+        transcriptRenderer?: {
+          content?: {
+            transcriptSearchPanelRenderer?: {
+              body?: {
+                transcriptSegmentListRenderer?: {
+                  initialSegments?: {
+                    transcriptSegmentRenderer?: {
+                      startMs?: string;
+                      endMs?: string;
+                      snippet?: { runs?: { text?: string }[]; simpleText?: string };
+                    };
+                  }[];
+                };
+              };
+            };
+          };
+        };
+      };
+    };
+  }[];
+}
+
+function parseInnertubeTranscript(
+  json: InnertubeTranscriptResponse,
+): TranscriptCue[] {
+  const initialSegments =
+    json?.actions?.[0]?.updateEngagementPanelAction?.content?.transcriptRenderer
+      ?.content?.transcriptSearchPanelRenderer?.body
+      ?.transcriptSegmentListRenderer?.initialSegments ?? [];
+  const cues: TranscriptCue[] = [];
+  for (const seg of initialSegments) {
+    const r = seg.transcriptSegmentRenderer;
+    if (!r) continue;
+    const startMs = parseInt(r.startMs ?? "0", 10);
+    const endMs = parseInt(r.endMs ?? "0", 10);
+    const runs = r.snippet?.runs ?? [];
+    const text = (
+      runs.map((run) => run.text ?? "").join("") ||
+      r.snippet?.simpleText ||
+      ""
+    )
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!text) continue;
+    cues.push({
+      startSeconds: startMs / 1000,
+      endSeconds: endMs / 1000,
+      text,
+    });
+  }
+  return cues;
+}
+
+async function fetchTranscriptViaInnertube(args: {
+  params: string;
+  apiKey: string;
+  context: unknown;
+}): Promise<TranscriptCue[]> {
+  const url = `https://www.youtube.com/youtubei/v1/get_transcript?key=${encodeURIComponent(
+    args.apiKey,
+  )}&prettyPrint=false`;
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      context: args.context,
+      params: args.params,
+    }),
+  });
+  if (!resp.ok) {
+    throw new Error(`InnerTube get_transcript ${resp.status}`);
+  }
+  const json = (await resp.json()) as InnertubeTranscriptResponse;
+  return parseInnertubeTranscript(json);
 }
 
 function pickCaptionTrack(
@@ -77,25 +215,51 @@ function pickCaptionTrack(
 async function fetchTranscriptCues(
   baseUrl: string,
 ): Promise<TranscriptCue[]> {
-  const sep = baseUrl.includes("?") ? "&" : "?";
-  const url = baseUrl + sep + "fmt=json3";
-  const resp = await fetch(url, { credentials: "include" });
+  const url = setQueryParam(baseUrl, "fmt", "json3");
+  const resp = await fetch(url);
   if (!resp.ok) {
     throw new Error(`Failed to fetch transcript (${resp.status}).`);
   }
-  const json = await resp.json();
+  const body = await resp.text();
+  if (!body.trim()) {
+    throw new Error("timedtext returned an empty body");
+  }
+  const json = JSON.parse(body);
   return timedtextJson3ToCues(json);
 }
 
-async function scrapeTranscriptFromDom(): Promise<TranscriptCue[]> {
-  const segments = document.querySelectorAll(
-    "ytd-transcript-segment-renderer",
+function setQueryParam(url: string, key: string, value: string): string {
+  try {
+    const u = new URL(url, location.origin);
+    u.searchParams.set(key, value);
+    return u.toString();
+  } catch {
+    const sep = url.includes("?") ? "&" : "?";
+    return url + sep + key + "=" + value;
+  }
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+function readSegmentsFromDom(): TranscriptCue[] {
+  // YouTube (2025+) renders transcript segments as <transcript-segment-view-model>
+  // with class ytwTranscriptSegmentViewModelHost. Older layouts used
+  // ytd-transcript-segment-renderer; we try the new shape first, then the legacy one.
+  const segments = document.querySelectorAll<HTMLElement>(
+    "transcript-segment-view-model, ytd-transcript-segment-renderer",
   );
   if (!segments.length) return [];
   const cues: TranscriptCue[] = [];
   segments.forEach((el) => {
-    const timeEl = el.querySelector(".segment-timestamp");
-    const textEl = el.querySelector(".segment-text");
+    const timeEl =
+      el.querySelector(".ytwTranscriptSegmentViewModelTimestamp") ??
+      el.querySelector(".segment-timestamp") ??
+      el.querySelector('[class*="Timestamp"], [class*="timestamp"]');
+    const textEl =
+      el.querySelector('span[role="text"]') ??
+      el.querySelector(".ytAttributedStringHost") ??
+      el.querySelector(".segment-text") ??
+      el.querySelector("yt-formatted-string");
     if (!timeEl || !textEl) return;
     const seconds = parseTimestamp(timeEl.textContent?.trim() ?? "0:00");
     cues.push({
@@ -110,6 +274,220 @@ async function scrapeTranscriptFromDom(): Promise<TranscriptCue[]> {
   return cues;
 }
 
+function dumpTranscriptDomState(): void {
+  for (const q of [
+    "transcript-segment-view-model",
+    ".ytwTranscriptSegmentViewModelHost",
+    "ytd-transcript-segment-renderer",
+    "ytd-engagement-panel-section-list-renderer",
+    '[target-id*="transcript"]',
+  ]) {
+    const n = document.querySelectorAll(q).length;
+    if (n > 0) logd(`probe match  ${q} -> ${n}`);
+  }
+}
+
+// Robust fallback: find any container whose children look like transcript
+// segments (each child's text starts with a "M:SS" or "H:MM:SS" timestamp).
+// Doesn't depend on YouTube-specific element names.
+function readSegmentsByPattern(): TranscriptCue[] {
+  const tsRe = /^((?:\d{1,2}:)?\d{1,2}:\d{2})\s+(.+)$/s;
+  const tsHead = /^(?:\d{1,2}:)?\d{1,2}:\d{2}$/;
+  let bestContainer: HTMLElement | null = null;
+  let bestCount = 0;
+
+  // First, try short-circuit: look for siblings whose text starts with M:SS.
+  const all = document.querySelectorAll<HTMLElement>("div, section, ul, ol");
+  for (const el of Array.from(all)) {
+    const kids = el.children;
+    if (kids.length < 3) continue;
+    let hits = 0;
+    for (let i = 0; i < Math.min(kids.length, 50); i++) {
+      const t = (kids[i] as HTMLElement).textContent?.trim() ?? "";
+      if (tsRe.test(t)) hits++;
+    }
+    if (hits > bestCount) {
+      bestCount = hits;
+      bestContainer = el;
+    }
+  }
+  if (!bestContainer || bestCount < 3) return [];
+
+  const cues: TranscriptCue[] = [];
+  for (const child of Array.from(bestContainer.children)) {
+    const text = (child as HTMLElement).textContent?.trim() ?? "";
+    const m = text.match(tsRe);
+    if (!m) {
+      // Two-element layout: timestamp in one span, body in next span/div
+      const tsEl = child.querySelector<HTMLElement>(
+        'span, div, [class*="time"], [class*="timestamp"]',
+      );
+      if (!tsEl) continue;
+      const tsText = tsEl.textContent?.trim() ?? "";
+      if (!tsHead.test(tsText)) continue;
+      const rest = text.replace(tsText, "").replace(/\s+/g, " ").trim();
+      if (!rest) continue;
+      cues.push({
+        startSeconds: parseTimestamp(tsText),
+        endSeconds: parseTimestamp(tsText) + 4,
+        text: rest,
+      });
+      continue;
+    }
+    cues.push({
+      startSeconds: parseTimestamp(m[1]),
+      endSeconds: parseTimestamp(m[1]) + 4,
+      text: m[2].replace(/\s+/g, " ").trim(),
+    });
+  }
+  for (let i = 0; i < cues.length - 1; i++) {
+    cues[i].endSeconds = cues[i + 1].startSeconds;
+  }
+  logd("readSegmentsByPattern matched", { container: bestContainer.tagName + (bestContainer.id ? "#" + bestContainer.id : ""), cues: cues.length });
+  return cues;
+}
+
+function fireRealClick(el: HTMLElement): void {
+  const inner =
+    el.matches("button, [role='button']")
+      ? el
+      : el.querySelector<HTMLElement>("button, [role='button']") ?? el;
+  try {
+    inner.click();
+  } catch {}
+  for (const type of [
+    "pointerdown",
+    "mousedown",
+    "pointerup",
+    "mouseup",
+    "click",
+  ]) {
+    inner.dispatchEvent(
+      new MouseEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        button: 0,
+      }),
+    );
+  }
+  logd("fired click on", {
+    tag: inner.tagName,
+    label:
+      inner.getAttribute("aria-label") ??
+      inner.textContent?.trim().slice(0, 60),
+    matchedSame: inner === el,
+  });
+}
+
+function logd(msg: string, extra?: unknown): void {
+  if (extra !== undefined) console.log(`cnstlltn: ${msg}`, extra);
+  else console.log(`cnstlltn: ${msg}`);
+}
+
+function findTranscriptToggleButton(): HTMLElement | null {
+  const candidates = document.querySelectorAll<HTMLElement>(
+    'button, tp-yt-paper-item, tp-yt-paper-button, yt-button-shape, ytd-button-renderer, [role="button"], a',
+  );
+  for (const el of Array.from(candidates)) {
+    const label = (
+      el.getAttribute("aria-label") ??
+      el.getAttribute("title") ??
+      el.textContent ??
+      ""
+    )
+      .toLowerCase()
+      .trim();
+    if (!label) continue;
+    if (/^(show|open)\s+transcript$/.test(label)) return el;
+    if (/\btranscript\b/.test(label) && label.length < 40) {
+      // Avoid grabbing huge descriptive blocks that happen to mention "transcript".
+      return el;
+    }
+  }
+  return null;
+}
+
+function clickDescriptionExpanders(): number {
+  const sels = [
+    "ytd-text-inline-expander tp-yt-paper-button#expand",
+    "ytd-text-inline-expander #expand",
+    "#description-inline-expander #expand",
+    "#description tp-yt-paper-button#expand",
+    "tp-yt-paper-button#expand",
+  ];
+  const seen = new Set<HTMLElement>();
+  for (const sel of sels) {
+    document.querySelectorAll<HTMLElement>(sel).forEach((el) => {
+      if (!seen.has(el)) {
+        seen.add(el);
+        try {
+          el.click();
+        } catch {}
+      }
+    });
+  }
+  return seen.size;
+}
+
+async function openAndScrapeTranscript(): Promise<TranscriptCue[]> {
+  let cues = readSegmentsFromDom();
+  if (cues.length) {
+    logd("transcript already open, scraped segments", cues.length);
+    return cues;
+  }
+  cues = readSegmentsByPattern();
+  if (cues.length) {
+    logd("transcript already open (pattern match)", cues.length);
+    return cues;
+  }
+
+  let btn = findTranscriptToggleButton();
+  logd("initial transcript-button search", btn ? "found" : "not found");
+
+  if (!btn) {
+    const expanded = clickDescriptionExpanders();
+    logd("clicked description expanders", expanded);
+    for (let i = 0; i < 20; i++) {
+      await sleep(150);
+      btn = findTranscriptToggleButton();
+      if (btn) {
+        logd("found transcript button after expand, waited ms", i * 150);
+        break;
+      }
+    }
+  }
+
+  if (!btn) {
+    logd("no transcript button found after expanding description");
+    return [];
+  }
+
+  logd("clicking transcript button", {
+    label:
+      btn.getAttribute("aria-label") ?? btn.textContent?.trim().slice(0, 60),
+    tag: btn.tagName,
+  });
+  fireRealClick(btn);
+
+  for (let i = 0; i < 40; i++) {
+    await sleep(150);
+    cues = readSegmentsFromDom();
+    if (cues.length) {
+      logd("segments rendered after click, ms", i * 150);
+      return cues;
+    }
+    cues = readSegmentsByPattern();
+    if (cues.length) {
+      logd("segments rendered after click (pattern), ms", i * 150);
+      return cues;
+    }
+    if (i === 4 || i === 14 || i === 39) dumpTranscriptDomState();
+  }
+  logd("segments never appeared after click; aborting");
+  return [];
+}
+
 function parseTimestamp(ts: string): number {
   const parts = ts.split(":").map((p) => parseInt(p, 10) || 0);
   if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
@@ -121,20 +499,32 @@ async function extractTranscript(): Promise<{
   cues: TranscriptCue[];
   videoMeta: VideoMeta;
 }> {
-  const playerResp = await readPlayerResponseFromPage();
+  const main = await readMainWorldPayload();
+  const playerResp = main?.playerResponse ?? null;
   const videoId = playerResp?.videoDetails?.videoId ?? getVideoId() ?? "";
   if (!videoId) throw new Error("Could not determine video ID.");
 
   const videoMeta: VideoMeta = {
     videoId,
     url: `https://www.youtube.com/watch?v=${videoId}`,
-    title: playerResp?.videoDetails?.title ?? document.title.replace(/ - YouTube$/, ""),
+    title:
+      playerResp?.videoDetails?.title ??
+      document.title.replace(/ - YouTube$/, ""),
     channel: playerResp?.videoDetails?.author ?? "",
     durationSeconds: playerResp?.videoDetails?.lengthSeconds
       ? parseInt(playerResp.videoDetails.lengthSeconds, 10)
       : null,
   };
 
+  // Primary: open the transcript panel via the description chip and scrape
+  // the rendered `transcript-segment-view-model` elements. We previously tried
+  // calling /youtubei/v1/get_transcript directly, but YT's "Precondition check
+  // failed" requires a per-request SAPISIDHASH header that's brittle to
+  // replicate. DOM scrape avoids all that.
+  const domCues = await openAndScrapeTranscript();
+  if (domCues.length) return { cues: domCues, videoMeta };
+
+  // 3. timedtext (mostly broken due to PoT, kept as last resort)
   const tracks =
     playerResp?.captions?.playerCaptionsTracklistRenderer?.captionTracks ?? [];
   const pick = pickCaptionTrack(tracks);
@@ -143,12 +533,9 @@ async function extractTranscript(): Promise<{
       const cues = await fetchTranscriptCues(pick.baseUrl);
       if (cues.length) return { cues, videoMeta };
     } catch (err) {
-      console.warn("notetaker: timedtext fetch failed, trying DOM", err);
+      console.warn("cnstlltn: timedtext fetch failed", err);
     }
   }
-
-  const domCues = await scrapeTranscriptFromDom();
-  if (domCues.length) return { cues: domCues, videoMeta };
 
   throw new Error(
     "No transcript available. Open the transcript panel manually or paste text in the side panel.",
@@ -164,7 +551,7 @@ function ensureButton() {
 
   const btn = document.createElement("button");
   btn.id = BUTTON_ID;
-  btn.textContent = "📝 Notetaker";
+  btn.textContent = "📝 cnstlltn";
   Object.assign(btn.style, {
     position: "fixed",
     right: "20px",
@@ -183,6 +570,13 @@ function ensureButton() {
   } as Partial<CSSStyleDeclaration>);
 
   btn.addEventListener("click", async () => {
+    // Open the side panel FIRST, synchronously, while we still hold the user
+    // gesture. chrome.sidePanel.open() rejects if called after any `await`,
+    // so we fire-and-forget this before doing transcript extraction.
+    chrome.runtime
+      .sendMessage({ type: "OPEN_SIDE_PANEL" })
+      .catch((err) => console.warn("cnstlltn: open-panel send failed", err));
+
     const original = btn.textContent;
     btn.textContent = "📝 extracting…";
     btn.setAttribute("disabled", "true");
@@ -203,7 +597,7 @@ function ensureButton() {
         btn.removeAttribute("disabled");
       }, 2000);
     } catch (err) {
-      console.error("notetaker: extract failed", err);
+      console.error("cnstlltn: extract failed", err);
       btn.textContent = "📝 failed — see console";
       setTimeout(() => {
         btn.textContent = original;

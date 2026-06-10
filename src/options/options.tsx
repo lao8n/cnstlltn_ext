@@ -62,7 +62,7 @@ function Options() {
   return (
     <div className="max-w-2xl mx-auto p-8 space-y-6">
       <header className="space-y-1">
-        <h1 className="text-2xl font-semibold">Notetaker settings</h1>
+        <h1 className="text-2xl font-semibold">cnstlltn settings</h1>
         <p className="text-sm opacity-70">
           BYOK — all keys stay in this browser's local storage. Nothing is sent
           to any server other than Google Gemini and GitHub directly.
@@ -85,14 +85,23 @@ function Options() {
         </Field>
         <Field
           label="Model"
-          hint="Defaults to gemini-2.5-pro. gemini-2.5-flash is cheaper/faster."
+          hint="Flash is free and good for note generation. Pro is higher quality but requires billing enabled on your Google Cloud project."
         >
-          <input
-            type="text"
+          <select
             value={s.model}
             onChange={(e) => update({ model: e.target.value })}
             className="nt-input"
-          />
+          >
+            <option value="gemini-2.5-flash">
+              gemini-2.5-flash (free tier — recommended)
+            </option>
+            <option value="gemini-2.5-flash-lite">
+              gemini-2.5-flash-lite (free tier — fastest)
+            </option>
+            <option value="gemini-2.5-pro">
+              gemini-2.5-pro (paid — needs billing)
+            </option>
+          </select>
         </Field>
       </Section>
 

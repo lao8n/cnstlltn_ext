@@ -1,9 +1,9 @@
-# Notetaker
+# cnstlltn (extension)
 
 Chrome extension companion to [cnstlltn](https://github.com/lao8n/cnstlltn) — turns YouTube videos into a personal, GitHub-backed knowledge base.
 
-On any YouTube watch page, hit the floating **📝 Notetaker** button → the
-extension pulls the transcript → OpenAI generates a list of candidate notes →
+On any YouTube watch page, hit the floating **📝 cnstlltn** button → the
+extension pulls the transcript → Gemini generates a list of candidate notes →
 you tick the ones to keep → they get committed straight to a GitHub repo of
 your choice as Markdown files with rich YAML frontmatter.
 
@@ -44,7 +44,7 @@ or right-click the toolbar icon → Options):
 | Field | What |
 |-------|------|
 | Gemini API key | `AIza…` from <https://aistudio.google.com/apikey>. BYOK; stored in `chrome.storage.local`, never leaves your browser. |
-| Model | Defaults to `gemini-2.5-pro`. `gemini-2.5-flash` is cheaper/faster. |
+| Model | Defaults to `gemini-2.5-flash` (free tier). `gemini-2.5-pro` is higher quality but requires Google Cloud billing enabled. |
 | GitHub PAT | A **fine-grained** personal access token scoped to your notes repo: `Contents: read/write` + `Metadata: read`. <https://github.com/settings/personal-access-tokens/new> |
 | Owner / Repo | Your GitHub username and the repo name. |
 | Branch | `main` by default. |
@@ -56,7 +56,7 @@ owner field matches your authenticated user).
 ## Use it
 
 1. Open any YouTube video with English captions.
-2. Click the **📝 Notetaker** button (bottom-right of the page).
+2. Click the **📝 cnstlltn** button (bottom-right of the page).
 3. The side panel opens.
 4. Pick an existing topic or create a new one (e.g. `iran-israel-war`).
 5. Click **Generate notes from this video** — ~10–30 seconds.

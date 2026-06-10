@@ -8,6 +8,26 @@ export interface FileToCommit {
   noteRef?: { id: string; title: string };
 }
 
+function isEmptyRepoError(err: unknown): boolean {
+  const status =
+    typeof err === "object" && err && "status" in err
+      ? (err as { status: number }).status
+      : 0;
+  const message =
+    typeof err === "object" && err && "message" in err
+      ? String((err as { message: unknown }).message)
+      : "";
+  return status === 409 || /empty/i.test(message);
+}
+
+// UTF-8 → base64 (the GitHub Contents API requires base64 with UTF-8 input).
+function utf8ToBase64(s: string): string {
+  const bytes = new TextEncoder().encode(s);
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin);
+}
+
 export class GitHubClient {
   constructor(private auth: GitHubAuth = defaultAuth) {}
 
@@ -169,19 +189,63 @@ export class GitHubClient {
     const octokit = await this.auth.getOctokit();
     const { owner, repo, branch } = await this.auth.getOwnerRepo();
 
-    const refResp = await octokit.rest.git.getRef({
-      owner,
-      repo,
-      ref: `heads/${branch}`,
-    });
-    const baseSha = refResp.data.object.sha;
-
-    const baseCommit = await octokit.rest.git.getCommit({
-      owner,
-      repo,
-      commit_sha: baseSha,
-    });
-    const baseTreeSha = baseCommit.data.tree.sha;
+    // Empty-repo detection. GitHub blocks the entire git/* API on empty
+    // repos (createBlob 409 too, not just getRef). So if the repo is empty
+    // we bootstrap it with one commit via the Contents API — which DOES
+    // work on empty repos and initializes the default branch — and then
+    // fall through to the normal batched git-data-API path.
+    let baseSha: string | null = null;
+    let baseTreeSha: string | null = null;
+    try {
+      const refResp = await octokit.rest.git.getRef({
+        owner,
+        repo,
+        ref: `heads/${branch}`,
+      });
+      baseSha = refResp.data.object.sha;
+      const baseCommit = await octokit.rest.git.getCommit({
+        owner,
+        repo,
+        commit_sha: baseSha,
+      });
+      baseTreeSha = baseCommit.data.tree.sha;
+    } catch (err) {
+      if (!isEmptyRepoError(err)) throw err;
+      // Bootstrap: create one file (.kbconfig.yaml) via the Contents API.
+      // This is the only API path that works on a truly empty repo. After
+      // this lands, the repo has one commit and the default branch exists.
+      const bootstrapResp = await octokit.rest.repos.createOrUpdateFileContents({
+        owner,
+        repo,
+        branch,
+        path: KB_PATHS.config(),
+        message: "init: cnstlltn KB",
+        content: utf8ToBase64(buildKbConfig()),
+      });
+      // Take the bootstrap commit as our base.
+      const newCommitSha = bootstrapResp.data.commit.sha;
+      if (!newCommitSha) {
+        throw new Error("Bootstrap commit returned no sha");
+      }
+      baseSha = newCommitSha;
+      const baseCommit = await octokit.rest.git.getCommit({
+        owner,
+        repo,
+        commit_sha: baseSha,
+      });
+      baseTreeSha = baseCommit.data.tree.sha;
+      // We already wrote .kbconfig.yaml above; drop it from the upcoming batch
+      // so we don't pointlessly include it in the second commit's tree.
+      args.files = args.files.filter((f) => f.path !== KB_PATHS.config());
+      if (args.files.length === 0) {
+        // Bootstrap-only commit (no notes selected somehow). Return it.
+        return {
+          sha: baseSha,
+          url: `https://github.com/${owner}/${repo}/commit/${baseSha}`,
+          noteRefs: [],
+        };
+      }
+    }
 
     const blobs = await Promise.all(
       args.files.map(async (file) => {
@@ -203,7 +267,7 @@ export class GitHubClient {
     const tree = await octokit.rest.git.createTree({
       owner,
       repo,
-      base_tree: baseTreeSha,
+      base_tree: baseTreeSha!,
       tree: blobs,
     });
 
@@ -212,7 +276,7 @@ export class GitHubClient {
       repo,
       message: args.message,
       tree: tree.data.sha,
-      parents: [baseSha],
+      parents: [baseSha!],
     });
 
     await octokit.rest.git.updateRef({
