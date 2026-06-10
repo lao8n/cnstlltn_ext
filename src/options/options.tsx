@@ -96,7 +96,7 @@ function Options() {
               gemini-2.5-flash (free tier — recommended)
             </option>
             <option value="gemini-2.5-flash-lite">
-              gemini-2.5-flash-lite (free tier — fastest)
+              gemini-2.5-flash-lite (free tier — fastest, shorter notes)
             </option>
             <option value="gemini-2.5-pro">
               gemini-2.5-pro (paid — needs billing)

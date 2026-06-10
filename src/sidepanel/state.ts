@@ -1,10 +1,5 @@
 import { create } from "zustand";
-import type {
-  CommittedNoteRef,
-  LLMNote,
-  SessionPayload,
-  Settings,
-} from "@/lib/types";
+import type { LLMNote, SessionPayload, Settings } from "@/lib/types";
 
 export type Phase =
   | "loading"
@@ -14,18 +9,24 @@ export type Phase =
   | "generating"
   | "candidates"
   | "committing"
-  | "committed"
   | "error";
 
 // One frame per drill level. drillStack[0] is the root level (no parent).
-// Each frame caches its candidates + selection, so going back is instant
-// (no LLM re-call). When the user drills, a new frame is pushed; the new
-// frame's `parent` is the candidate that was drilled into, with a stable
-// pre-assigned ULID so descendants can reference it via `parents`.
+// Each frame caches its candidates + selection. childrenByCandidateIdx keeps
+// previously generated drill results so navigating up/down the tree never
+// re-calls the LLM for the same branch.
 export interface DrillFrame {
   parent: { id: string; llmNote: LLMNote } | null; // null only for the root frame
   candidates: LLMNote[];
   selectedIdxs: Set<number>;
+  childrenByCandidateIdx: Record<number, DrillFrame>;
+  // Index in the parent frame's candidates that was drilled into (undefined on root).
+  drilledFromIdx?: number;
+}
+
+export interface CommitBanner {
+  count: number;
+  url: string | null;
 }
 
 interface State {
@@ -38,8 +39,7 @@ interface State {
   newTopicTitle: string;
   isNewTopic: boolean;
   drillStack: DrillFrame[];
-  committedRefs: CommittedNoteRef[];
-  lastCommitUrl: string | null;
+  commitBanner: CommitBanner | null;
   notesForTopic: { id: string; title: string; path: string }[];
 }
 
@@ -55,15 +55,32 @@ interface Actions {
   // Replace the drill stack entirely (used when we regenerate root candidates).
   setRootFrame: (candidates: LLMNote[]) => void;
   pushDrillFrame: (frame: DrillFrame) => void;
+  cacheChildFrame: (candidateIdx: number, frame: DrillFrame) => void;
   popDrillFrame: () => void;
+  popToStackRoot: () => void;
   toggleSelected: (idx: number) => void;
   clearStack: () => void;
-  setCommittedRefs: (r: CommittedNoteRef[]) => void;
-  setLastCommitUrl: (u: string | null) => void;
+  setCommitBanner: (b: CommitBanner | null) => void;
   setNotesForTopic: (
     n: { id: string; title: string; path: string }[],
   ) => void;
   resetForNewBatch: () => void;
+}
+
+/** Keep parent's childrenByCandidateIdx in sync with the live stack top. */
+function syncTopFrameToParentCache(stack: DrillFrame[]): DrillFrame[] {
+  if (stack.length < 2) return stack;
+  const child = stack[stack.length - 1];
+  const drillIdx = child.drilledFromIdx;
+  if (drillIdx == null) return stack;
+  const stackCopy = stack.slice();
+  const parent = { ...stackCopy[stackCopy.length - 2] };
+  parent.childrenByCandidateIdx = {
+    ...parent.childrenByCandidateIdx,
+    [drillIdx]: child,
+  };
+  stackCopy[stackCopy.length - 2] = parent;
+  return stackCopy;
 }
 
 export const useStore = create<State & Actions>((set) => ({
@@ -76,8 +93,7 @@ export const useStore = create<State & Actions>((set) => ({
   newTopicTitle: "",
   isNewTopic: false,
   drillStack: [],
-  committedRefs: [],
-  lastCommitUrl: null,
+  commitBanner: null,
   notesForTopic: [],
 
   setPhase: (phase) => set({ phase }),
@@ -91,14 +107,41 @@ export const useStore = create<State & Actions>((set) => ({
   setIsNewTopic: (isNewTopic) => set({ isNewTopic }),
   setRootFrame: (candidates) =>
     set({
+      commitBanner: null,
       drillStack: [
-        { parent: null, candidates, selectedIdxs: new Set<number>() },
+        {
+          parent: null,
+          candidates,
+          selectedIdxs: new Set<number>(),
+          childrenByCandidateIdx: {},
+        },
       ],
     }),
   pushDrillFrame: (frame) =>
     set((s) => ({ drillStack: [...s.drillStack, frame] })),
+  cacheChildFrame: (candidateIdx, frame) =>
+    set((s) => {
+      if (s.drillStack.length === 0) return {};
+      const stack = s.drillStack.slice();
+      const top = { ...stack[stack.length - 1] };
+      top.childrenByCandidateIdx = {
+        ...top.childrenByCandidateIdx,
+        [candidateIdx]: frame,
+      };
+      stack[stack.length - 1] = top;
+      return { drillStack: stack };
+    }),
   popDrillFrame: () =>
-    set((s) => ({ drillStack: s.drillStack.slice(0, -1) })),
+    set((s) => {
+      if (s.drillStack.length <= 1) return {};
+      const synced = syncTopFrameToParentCache(s.drillStack);
+      return { drillStack: synced.slice(0, -1) };
+    }),
+  popToStackRoot: () =>
+    set((s) => ({
+      drillStack: s.drillStack.length > 0 ? [s.drillStack[0]] : [],
+      phase: "candidates",
+    })),
   toggleSelected: (idx) =>
     set((s) => {
       if (s.drillStack.length === 0) return {};
@@ -109,17 +152,15 @@ export const useStore = create<State & Actions>((set) => ({
       else next.add(idx);
       last.selectedIdxs = next;
       stack[stack.length - 1] = last;
-      return { drillStack: stack };
+      return { drillStack: syncTopFrameToParentCache(stack) };
     }),
-  clearStack: () => set({ drillStack: [] }),
-  setCommittedRefs: (committedRefs) => set({ committedRefs }),
-  setLastCommitUrl: (lastCommitUrl) => set({ lastCommitUrl }),
+  clearStack: () => set({ drillStack: [], commitBanner: null }),
+  setCommitBanner: (commitBanner) => set({ commitBanner }),
   setNotesForTopic: (notesForTopic) => set({ notesForTopic }),
   resetForNewBatch: () =>
     set({
       drillStack: [],
-      committedRefs: [],
-      lastCommitUrl: null,
+      commitBanner: null,
       phase: "topic-picker",
     }),
 }));

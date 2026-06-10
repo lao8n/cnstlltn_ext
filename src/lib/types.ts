@@ -18,7 +18,7 @@ export const LLMNote = z.object({
   content: z
     .string()
     .describe(
-      "Note body in plain markdown (no leading heading, no bullet/number prefix).",
+      "Note body in plain markdown (no leading heading, no bullet/number prefix). Roughly 8-12 sentences for root notes, 6-10 for drill sub-notes.",
     ),
   claim_type: ClaimType,
   tags: z.array(z.string()),

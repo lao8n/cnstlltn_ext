@@ -8,16 +8,34 @@ export interface FileToCommit {
   noteRef?: { id: string; title: string };
 }
 
+function githubHttpStatus(err: unknown): number {
+  if (typeof err !== "object" || !err) return 0;
+  if ("status" in err && typeof (err as { status: unknown }).status === "number") {
+    return (err as { status: number }).status;
+  }
+  const response = (err as { response?: { status?: number } }).response;
+  if (typeof response?.status === "number") return response.status;
+  return 0;
+}
+
+function githubErrorMessage(err: unknown): string {
+  if (typeof err === "object" && err && "message" in err) {
+    return String((err as { message: unknown }).message);
+  }
+  return "";
+}
+
 function isEmptyRepoError(err: unknown): boolean {
-  const status =
-    typeof err === "object" && err && "status" in err
-      ? (err as { status: number }).status
-      : 0;
-  const message =
-    typeof err === "object" && err && "message" in err
-      ? String((err as { message: unknown }).message)
-      : "";
+  const status = githubHttpStatus(err);
+  const message = githubErrorMessage(err);
   return status === 409 || /empty/i.test(message);
+}
+
+/** topics/ missing, repo empty, or branch/path not found — not an auth failure. */
+function isMissingPathError(err: unknown): boolean {
+  const status = githubHttpStatus(err);
+  if (status === 404 || status === 409) return true;
+  return /not found/i.test(githubErrorMessage(err));
 }
 
 // UTF-8 → base64 (the GitHub Contents API requires base64 with UTF-8 input).
@@ -98,11 +116,7 @@ export class GitHubClient {
       });
       return true;
     } catch (err) {
-      const status =
-        typeof err === "object" && err && "status" in err
-          ? (err as { status: number }).status
-          : 0;
-      if (status === 404) return false;
+      if (githubHttpStatus(err) === 404) return false;
       throw err;
     }
   }
@@ -120,11 +134,7 @@ export class GitHubClient {
       if (!Array.isArray(data)) return [];
       return data.filter((d) => d.type === "dir").map((d) => d.name).sort();
     } catch (err) {
-      const status =
-        typeof err === "object" && err && "status" in err
-          ? (err as { status: number }).status
-          : 0;
-      if (status === 404) return [];
+      if (isMissingPathError(err)) return [];
       throw err;
     }
   }

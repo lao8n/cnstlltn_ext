@@ -1,4 +1,4 @@
-import type { TranscriptCue } from "./types";
+import type { LLMNote, TranscriptCue } from "./types";
 
 function pad(n: number, width = 2): string {
   return n.toString().padStart(width, "0");
@@ -28,6 +28,68 @@ export function cuesToVtt(cues: TranscriptCue[]): string {
     lines.push("");
   }
   return lines.join("\n");
+}
+
+function findCueIndexAt(cues: TranscriptCue[], seconds: number): number {
+  const idx = cues.findIndex(
+    (c) => c.startSeconds <= seconds && c.endSeconds >= seconds,
+  );
+  if (idx >= 0) return idx;
+  let best = 0;
+  let bestDist = Infinity;
+  for (let i = 0; i < cues.length; i++) {
+    const dist = Math.min(
+      Math.abs(cues[i].startSeconds - seconds),
+      Math.abs(cues[i].endSeconds - seconds),
+    );
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = i;
+    }
+  }
+  return best;
+}
+
+/** Snap LLM timestamps to real cue boundaries so start/end match the video. */
+export function refineNoteTimestamps(
+  notes: LLMNote[],
+  cues: TranscriptCue[],
+  bounds?: { minSeconds: number; maxSeconds: number },
+): LLMNote[] {
+  if (!cues.length) return notes;
+  const lastEnd = Math.ceil(cues[cues.length - 1].endSeconds);
+
+  return notes.map((note) => {
+    let start = Math.max(0, Math.min(note.start_seconds, lastEnd));
+    let end = Math.max(0, Math.min(note.end_seconds, lastEnd));
+
+    if (bounds) {
+      start = Math.max(bounds.minSeconds, start);
+      end = Math.min(bounds.maxSeconds, end);
+    }
+
+    const startIdx = findCueIndexAt(cues, start);
+    const endIdx = findCueIndexAt(cues, end);
+    const lo = Math.min(startIdx, endIdx);
+    const hi = Math.max(startIdx, endIdx);
+
+    start = Math.floor(cues[lo].startSeconds);
+    end = Math.ceil(cues[hi].endSeconds);
+
+    if (bounds) {
+      start = Math.max(bounds.minSeconds, start);
+      end = Math.min(bounds.maxSeconds, end);
+    }
+    if (end <= start) {
+      end = Math.min(
+        bounds?.maxSeconds ?? lastEnd,
+        Math.ceil(cues[lo].endSeconds),
+      );
+    }
+    if (end <= start) end = start + 1;
+
+    return { ...note, start_seconds: start, end_seconds: end };
+  });
 }
 
 export function cuesToPromptText(cues: TranscriptCue[]): string {

@@ -50,19 +50,40 @@ function App() {
       s.setPhase("no-settings");
       return;
     }
+    const prevVideoId = useStore.getState().session?.videoMeta.videoId;
     const session = await send<SessionPayload | null>({ type: "GET_SESSION" });
     s.setSession(session);
     if (!session) {
       s.setPhase("no-session");
       return;
     }
-    try {
-      const topics = await send<string[]>({ type: "LIST_TOPICS" });
-      s.setTopics(topics);
-    } catch (err) {
-      s.setError(`Could not list topics: ${(err as Error).message}`);
+    const videoChanged =
+      prevVideoId != null && prevVideoId !== session.videoMeta.videoId;
+    if (videoChanged) {
+      s.clearStack();
+      s.setPhase("topic-picker");
     }
-    s.setPhase("topic-picker");
+    const phase = useStore.getState().phase;
+    const inWorkflow = ["generating", "candidates", "committing"].includes(
+      phase,
+    );
+    if (phase === "loading" || videoChanged) {
+      try {
+        const topics = await send<string[]>({ type: "LIST_TOPICS" });
+        s.setTopics(topics);
+      } catch (err) {
+        console.warn("Could not list topics, treating as empty:", err);
+        s.setTopics([]);
+      }
+    }
+    if (phase === "loading") {
+      s.setPhase("topic-picker");
+    } else if (videoChanged) {
+      s.setPhase("topic-picker");
+    } else if (!inWorkflow && phase === "error") {
+      // Session refreshed while idle — stay on topic picker.
+      s.setPhase("topic-picker");
+    }
   }
 
   async function onGenerate() {
@@ -74,6 +95,9 @@ function App() {
     s.setError(null);
     s.setPhase("generating");
     try {
+      const session = await send<SessionPayload | null>({ type: "GET_SESSION" });
+      if (!session) throw new Error("No active transcript session.");
+      s.setSession(session);
       const { notes } = await send<{ notes: LLMNote[] }>({
         type: "GENERATE_ROOT",
         topic,
@@ -95,11 +119,26 @@ function App() {
     if (!frame) return;
     const parentLLM = frame.candidates[candidateIdx];
     if (!parentLLM) return;
+
+    const cached = frame.childrenByCandidateIdx[candidateIdx];
+    if (cached) {
+      s.setError(null);
+      s.pushDrillFrame(
+        cached.drilledFromIdx != null
+          ? cached
+          : { ...cached, drilledFromIdx: candidateIdx },
+      );
+      s.setPhase("candidates");
+      return;
+    }
+
     // Pre-assign a stable ULID to the parent so descendants can reference it.
     const parentId = ulid();
     s.setError(null);
     s.setPhase("generating");
     try {
+      const session = await send<SessionPayload | null>({ type: "GET_SESSION" });
+      if (session) s.setSession(session);
       const { notes } = await send<{ notes: LLMNote[] }>({
         type: "GENERATE_DRILL",
         topic,
@@ -110,11 +149,15 @@ function App() {
           end_seconds: parentLLM.end_seconds,
         },
       });
-      s.pushDrillFrame({
+      const childFrame: DrillFrame = {
         parent: { id: parentId, llmNote: parentLLM },
         candidates: notes,
         selectedIdxs: new Set<number>(),
-      });
+        childrenByCandidateIdx: {},
+        drilledFromIdx: candidateIdx,
+      };
+      s.cacheChildFrame(candidateIdx, childFrame);
+      s.pushDrillFrame(childFrame);
       s.setPhase("candidates");
       retryRef.current = null;
     } catch (err) {
@@ -150,9 +193,11 @@ function App() {
         includeTranscript: true,
         notes,
       });
-      s.setCommittedRefs(result.noteRefs);
-      s.setLastCommitUrl(result.url);
-      s.setPhase("committed");
+      s.setCommitBanner({
+        count: result.noteRefs.length,
+        url: result.url,
+      });
+      s.popToStackRoot();
       retryRef.current = null;
       try {
         const allNotes = await send<{ id: string; title: string; path: string }[]>(
@@ -165,18 +210,6 @@ function App() {
       s.setError(friendlyError((err as Error).message));
       s.setPhase("error");
     }
-  }
-
-  async function refreshNotesForTopic() {
-    const topic = effectiveTopic(s);
-    if (!topic) return;
-    try {
-      const notes = await send<{ id: string; title: string; path: string }[]>({
-        type: "LIST_NOTES_FOR_TOPIC",
-        topic,
-      });
-      s.setNotesForTopic(notes);
-    } catch {}
   }
 
   return (
@@ -245,6 +278,13 @@ function App() {
         </div>
       )}
 
+      {s.commitBanner && s.phase === "candidates" && (
+        <CommitBannerView
+          banner={s.commitBanner}
+          onDismiss={() => s.setCommitBanner(null)}
+        />
+      )}
+
       {s.phase === "candidates" && currentFrame(s) && (
         <CandidateList
           stack={s.drillStack}
@@ -260,17 +300,6 @@ function App() {
       )}
 
       {s.phase === "committing" && <div>Committing to GitHub…</div>}
-
-      {s.phase === "committed" && (
-        <CommittedView
-          refs={s.committedRefs}
-          url={s.lastCommitUrl}
-          onAnother={async () => {
-            s.resetForNewBatch();
-            await refreshNotesForTopic();
-          }}
-        />
-      )}
 
       {s.phase === "error" && (
         <div className="flex gap-2">
@@ -506,21 +535,21 @@ function Breadcrumb({ stack }: { stack: DrillFrame[] }) {
   );
 }
 
-function CommittedView(props: {
-  refs: { id: string; title: string }[];
-  url: string | null;
-  onAnother: () => void;
+function CommitBannerView(props: {
+  banner: { count: number; url: string | null };
+  onDismiss: () => void;
 }) {
   return (
-    <div className="space-y-3">
-      <div className="rounded bg-emerald-100 text-emerald-900 dark:bg-emerald-950 dark:text-emerald-100 px-3 py-2">
+    <div className="rounded bg-emerald-100 text-emerald-900 dark:bg-emerald-950 dark:text-emerald-100 px-3 py-2 flex justify-between gap-2 items-start">
+      <div>
         <div className="font-medium">
-          Committed {props.refs.length} note{props.refs.length === 1 ? "" : "s"}.
+          Committed {props.banner.count} note
+          {props.banner.count === 1 ? "" : "s"}.
         </div>
-        {props.url && (
+        {props.banner.url && (
           <a
             className="text-xs underline"
-            href={props.url}
+            href={props.banner.url}
             target="_blank"
             rel="noreferrer"
           >
@@ -528,8 +557,12 @@ function CommittedView(props: {
           </a>
         )}
       </div>
-      <button className="nt-btn" onClick={props.onAnother}>
-        Start another batch
+      <button
+        className="text-xs opacity-70 hover:opacity-100 shrink-0"
+        onClick={props.onDismiss}
+        aria-label="Dismiss"
+      >
+        ✕
       </button>
     </div>
   );
