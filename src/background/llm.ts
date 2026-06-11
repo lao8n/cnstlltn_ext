@@ -14,6 +14,7 @@ Rules:
 - Tags are short lowercase keywords useful for clustering (3-6 per note).
 - TIMESTAMPS: start_seconds and end_seconds MUST be copied from the transcript line markers — use the integer inside (Ns) on the FIRST line the note draws from for start_seconds, and the integer on the LAST line for end_seconds. end_seconds must be greater than start_seconds. Never guess wall-clock times; never set start_seconds equal to end_seconds unless the note truly comes from a single cue line.
 - flag is true when the transcript clearly contains more detail on this note than your summary captures.
+- gold: set to true ONLY when a TOPIC GOAL is provided AND the note clearly (a) advances that goal AND (b) is not substantially covered by any note in the EXISTING NOTES list. If no topic goal or existing notes are provided, set gold=false for every note. Be selective — gold is for genuinely new, on-goal information; not for every interesting note.
 - speaker is the named individual the idea is attributed to if clear, else null.
 
 Aim for 5–10 candidate notes. Prefer fewer, richly detailed notes over many shallow ones.`;
@@ -27,6 +28,7 @@ Rules:
 - TIMESTAMPS: copy start_seconds and end_seconds from the (Ns) markers on the first and last transcript lines each sub-note uses. end_seconds must exceed start_seconds and both must fall inside the parent's range.
 - HARD CONSTRAINT: every sub-note's [start_seconds, end_seconds] must fall within the parent's range. Siblings may overlap each other but must all sit inside the parent's window.
 - flag is true if a sub-note itself has more detail in the transcript worth drilling into further.
+- gold: set to true ONLY when a TOPIC GOAL is provided AND the sub-note clearly (a) advances that goal AND (b) is not substantially covered by any note in the EXISTING NOTES list. Otherwise false.
 - Do not restate the parent note. Each sub-note must add something the parent does not already say.`;
 
 const MIN_ROOT_SENTENCES = 8;
@@ -58,6 +60,11 @@ const NOTE_PROPS = {
       "Seconds from the (Ns) marker on the LAST transcript line this note uses. Must be > start_seconds.",
   },
   flag: { type: Type.BOOLEAN },
+  gold: {
+    type: Type.BOOLEAN,
+    description:
+      "True ONLY if a topic goal is provided AND the note advances it AND isn't substantially covered by existing notes. Otherwise false.",
+  },
   speaker: { type: Type.STRING, nullable: true },
 };
 
@@ -77,6 +84,7 @@ const NOTES_SCHEMA = {
           "start_seconds",
           "end_seconds",
           "flag",
+          "gold",
           "speaker",
         ],
         propertyOrdering: [
@@ -87,6 +95,7 @@ const NOTES_SCHEMA = {
           "start_seconds",
           "end_seconds",
           "flag",
+          "gold",
           "speaker",
         ],
       },
@@ -148,10 +157,35 @@ async function callNoteGenerator(args: {
   );
 }
 
+function goldContextBlock(args: {
+  topicGoal?: string | null;
+  existingNotes?: { title: string; content: string }[] | null;
+}): string {
+  const hasGoal = !!args.topicGoal?.trim();
+  const hasExisting = (args.existingNotes?.length ?? 0) > 0;
+  if (!hasGoal && !hasExisting) return "";
+  const parts: string[] = [];
+  if (hasGoal) parts.push(`TOPIC GOAL: ${args.topicGoal!.trim()}`);
+  if (hasExisting) {
+    parts.push(
+      "EXISTING NOTES IN THIS TOPIC (title + body — anything substantially covered here should NOT be marked gold):",
+    );
+    for (const n of args.existingNotes!) {
+      parts.push(`- ${n.title}\n  ${n.content.replace(/\s+/g, " ").trim()}`);
+    }
+  }
+  parts.push(
+    "Use these to decide each candidate's gold flag. Otherwise leave it false.",
+  );
+  return "\n\n" + parts.join("\n");
+}
+
 export async function generateRootNotes(args: {
   cues: TranscriptCue[];
   videoTitle: string;
   channel: string;
+  topicGoal?: string | null;
+  existingNotes?: { title: string; content: string }[] | null;
 }): Promise<LLMNote[]> {
   const { model } = await getSettings();
   const transcriptText = cuesToPromptText(args.cues);
@@ -165,7 +199,7 @@ Produce candidate notes following the rules in the system message.
 
 CRITICAL: each note "content" must be 8-12 full sentences (~150-250 words). One-sentence summaries are not acceptable.
 
-TIMESTAMPS: for each note, set start_seconds and end_seconds from the (Ns) integers on the first and last transcript lines you used — not from [mm:ss] display times.`;
+TIMESTAMPS: for each note, set start_seconds and end_seconds from the (Ns) integers on the first and last transcript lines you used — not from [mm:ss] display times.${goldContextBlock(args)}`;
   const notes = await callNoteGenerator({
     systemPrompt: ROOT_SYSTEM_PROMPT,
     userPrompt,
@@ -183,6 +217,8 @@ export async function generateDrillNotes(args: {
   parentContent: string;
   parentStartSeconds: number;
   parentEndSeconds: number;
+  topicGoal?: string | null;
+  existingNotes?: { title: string; content: string }[] | null;
 }): Promise<LLMNote[]> {
   const { model } = await getSettings();
   // Slice the transcript to the parent's window (with a small buffer) so the
@@ -211,7 +247,7 @@ Produce sub-notes drilling into the parent, following the rules in the system me
 
 CRITICAL: each sub-note "content" must be 6-10 full sentences (~120-200 words). One-sentence summaries are not acceptable.
 
-TIMESTAMPS: copy (Ns) integers from the transcript lines — stay inside [${args.parentStartSeconds}, ${args.parentEndSeconds}].`;
+TIMESTAMPS: copy (Ns) integers from the transcript lines — stay inside [${args.parentStartSeconds}, ${args.parentEndSeconds}].${goldContextBlock(args)}`;
   const slicedForSnap = slicedCues.length ? slicedCues : args.cues;
   const notes = await callNoteGenerator({
     systemPrompt: DRILL_SYSTEM_PROMPT,

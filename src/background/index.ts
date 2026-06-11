@@ -57,9 +57,9 @@ async function handle(msg: Msg, sender: chrome.runtime.MessageSender) {
     case "LIST_NOTES_FOR_TOPIC":
       return github.listNotesForTopic(msg.topic);
     case "GENERATE_ROOT":
-      return runGenerateRoot(msg.topic);
+      return runGenerateRoot(msg);
     case "GENERATE_DRILL":
-      return runGenerateDrill(msg.topic, msg.parentNote);
+      return runGenerateDrill(msg);
     case "COMMIT_NOTES":
       return runCommit(msg);
     case "TEST_CONNECTION":
@@ -88,38 +88,34 @@ async function onTranscriptReady(
   return { ok: true };
 }
 
-async function runGenerateRoot(topic: string) {
+async function runGenerateRoot(msg: Extract<Msg, { type: "GENERATE_ROOT" }>) {
   const session = await getSession<SessionPayload>();
   if (!session) throw new Error("No active transcript session.");
   const notes = await generateRootNotes({
     cues: session.cues,
     videoTitle: session.videoMeta.title,
     channel: session.videoMeta.channel,
+    topicGoal: msg.topicGoal ?? null,
+    existingNotes: msg.existingNotes ?? null,
   });
-  return { topic, notes };
+  return { topic: msg.topic, notes };
 }
 
-async function runGenerateDrill(
-  topic: string,
-  parentNote: {
-    title: string;
-    content: string;
-    start_seconds: number;
-    end_seconds: number;
-  },
-) {
+async function runGenerateDrill(msg: Extract<Msg, { type: "GENERATE_DRILL" }>) {
   const session = await getSession<SessionPayload>();
   if (!session) throw new Error("No active transcript session.");
   const notes = await generateDrillNotes({
     cues: session.cues,
     videoTitle: session.videoMeta.title,
     channel: session.videoMeta.channel,
-    parentTitle: parentNote.title,
-    parentContent: parentNote.content,
-    parentStartSeconds: parentNote.start_seconds,
-    parentEndSeconds: parentNote.end_seconds,
+    parentTitle: msg.parentNote.title,
+    parentContent: msg.parentNote.content,
+    parentStartSeconds: msg.parentNote.start_seconds,
+    parentEndSeconds: msg.parentNote.end_seconds,
+    topicGoal: msg.topicGoal ?? null,
+    existingNotes: msg.existingNotes ?? null,
   });
-  return { topic, notes };
+  return { topic: msg.topic, notes };
 }
 
 async function runCommit(msg: Extract<Msg, { type: "COMMIT_NOTES" }>) {

@@ -37,6 +37,11 @@ export const LLMNote = z.object({
     .describe(
       "True if the source contains more detail on this note worth drilling into.",
     ),
+  gold: z
+    .boolean()
+    .describe(
+      "True ONLY when a topic goal is given AND this note (a) advances the goal AND (b) is not substantially covered by any existing note in the topic. False otherwise — including when no topic goal or existing notes are provided.",
+    ),
   speaker: z
     .string()
     .nullable()
@@ -126,7 +131,15 @@ export type Msg =
   | { type: "GET_SESSION" }
   | { type: "LIST_TOPICS" }
   | { type: "LIST_NOTES_FOR_TOPIC"; topic: string }
-  | { type: "GENERATE_ROOT"; topic: string }
+  | {
+      type: "GENERATE_ROOT";
+      topic: string;
+      // Optional gold-note context. When both are present the LLM scores
+      // candidates against the goal + existing notes and sets gold=true on
+      // notes that advance the goal and aren't already covered.
+      topicGoal?: string | null;
+      existingNotes?: { title: string; content: string }[] | null;
+    }
   | {
       type: "GENERATE_DRILL";
       topic: string;
@@ -136,6 +149,8 @@ export type Msg =
         start_seconds: number;
         end_seconds: number;
       };
+      topicGoal?: string | null;
+      existingNotes?: { title: string; content: string }[] | null;
     }
   | {
       type: "COMMIT_NOTES";

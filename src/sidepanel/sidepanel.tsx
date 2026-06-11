@@ -98,9 +98,29 @@ function App() {
       const session = await send<SessionPayload | null>({ type: "GET_SESSION" });
       if (!session) throw new Error("No active transcript session.");
       s.setSession(session);
+      // Pull existing notes' bodies for the topic — used as gold-note context.
+      // Skip for new topics (nothing exists yet) or if no description set
+      // (no goal to score against, so gold flag stays false everywhere).
+      let existingNotes: { title: string; content: string }[] | null = null;
+      const goal = s.currentTopicDescription.trim();
+      if (goal && !s.isNewTopic) {
+        try {
+          const { notes: existing } = await send<{
+            notes: { id: string; title: string; content: string }[];
+          }>({ type: "FETCH_TOPIC_NOTES_CONTENT", topic });
+          existingNotes = existing.map(({ title, content }) => ({
+            title,
+            content,
+          }));
+        } catch (err) {
+          console.warn("FETCH_TOPIC_NOTES_CONTENT failed, skipping:", err);
+        }
+      }
       const { notes } = await send<{ notes: LLMNote[] }>({
         type: "GENERATE_ROOT",
         topic,
+        topicGoal: goal || null,
+        existingNotes,
       });
       s.setRootFrame(notes);
       s.setPhase("candidates");
@@ -139,6 +159,21 @@ function App() {
     try {
       const session = await send<SessionPayload | null>({ type: "GET_SESSION" });
       if (session) s.setSession(session);
+      const goal = s.currentTopicDescription.trim();
+      let existingNotes: { title: string; content: string }[] | null = null;
+      if (goal && !s.isNewTopic) {
+        try {
+          const { notes: existing } = await send<{
+            notes: { id: string; title: string; content: string }[];
+          }>({ type: "FETCH_TOPIC_NOTES_CONTENT", topic });
+          existingNotes = existing.map(({ title, content }) => ({
+            title,
+            content,
+          }));
+        } catch (err) {
+          console.warn("FETCH_TOPIC_NOTES_CONTENT failed, skipping:", err);
+        }
+      }
       const { notes } = await send<{ notes: LLMNote[] }>({
         type: "GENERATE_DRILL",
         topic,
@@ -148,6 +183,8 @@ function App() {
           start_seconds: parentLLM.start_seconds,
           end_seconds: parentLLM.end_seconds,
         },
+        topicGoal: goal || null,
+        existingNotes,
       });
       const childFrame: DrillFrame = {
         parent: { id: parentId, llmNote: parentLLM },
@@ -531,6 +568,7 @@ function CandidateList(props: {
       <ul className="space-y-2">
         {frame.candidates.map((n, i) => {
           const selected = frame.selectedIdxs.has(i);
+          const gold = n.gold === true;
           return (
             <li
               key={i}
@@ -546,8 +584,12 @@ function CandidateList(props: {
               className={
                 "relative rounded border px-3 py-2 pr-9 cursor-pointer transition-colors " +
                 (selected
-                  ? "bg-slate-900 text-slate-50 border-slate-900 dark:bg-slate-100 dark:text-slate-900 dark:border-slate-100"
-                  : "border-slate-300 hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800")
+                  ? gold
+                    ? "bg-amber-900 text-amber-50 border-amber-700 dark:bg-amber-100 dark:text-amber-950 dark:border-amber-300"
+                    : "bg-slate-900 text-slate-50 border-slate-900 dark:bg-slate-100 dark:text-slate-900 dark:border-slate-100"
+                  : gold
+                    ? "bg-amber-100 text-amber-950 border-amber-300 hover:bg-amber-200 dark:bg-amber-950 dark:text-amber-100 dark:border-amber-800 dark:hover:bg-amber-900"
+                    : "border-slate-300 hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800")
               }
             >
               <div className="space-y-1">
