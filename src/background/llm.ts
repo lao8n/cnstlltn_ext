@@ -129,7 +129,12 @@ async function callNoteGenerator(args: {
 }): Promise<LLMNote[]> {
   const ai = await getClient();
   let userPrompt = args.userPrompt;
+  let lastNotes: LLMNote[] | null = null;
 
+  // We strongly request long notes in the prompt and give the model one retry
+  // nudge if it comes back short. Length is a soft preference, not a hard
+  // requirement — if the model still returns shorter notes we use them anyway
+  // rather than failing the whole run.
   for (let attempt = 0; attempt < 2; attempt++) {
     const response = await ai.models.generateContent({
       model: args.model,
@@ -144,6 +149,7 @@ async function callNoteGenerator(args: {
     if (!raw) throw new Error("Gemini returned no content.");
     const parsed = JSON.parse(raw);
     const validated = LLMNotes.parse(parsed);
+    lastNotes = validated.notes;
     if (!notesTooShort(validated.notes, args.minSentences)) {
       return validated.notes;
     }
@@ -152,9 +158,8 @@ async function callNoteGenerator(args: {
       `\n\nRETRY — your previous output was too short. Every "content" field MUST be at least ${args.minSentences} complete sentences (~150+ words each). Expand with reasoning, evidence, quotes, and nuance from the transcript. Do not return one- or two-sentence summaries.`;
   }
 
-  throw new Error(
-    `Gemini returned notes that were too short (need ~${args.minSentences} sentences each). Try gemini-2.5-flash instead of flash-lite in Settings.`,
-  );
+  // Still short after the retry nudge — accept what we have instead of erroring.
+  return lastNotes ?? [];
 }
 
 function goldContextBlock(args: {
