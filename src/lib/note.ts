@@ -85,13 +85,13 @@ export function serialiseNote(
 
 const FRONTMATTER_RE = /^---\n([\s\S]*?)\n---\n?/;
 
-export function parseNote(
+export function parseFrontmatter<T>(
   raw: string,
-): { frontmatter: NoteFrontmatter; body: string } | null {
+): { frontmatter: T; body: string } | null {
   const m = raw.match(FRONTMATTER_RE);
   if (!m) return null;
   try {
-    const frontmatter = yaml.load(m[1]) as NoteFrontmatter;
+    const frontmatter = yaml.load(m[1]) as T;
     const body = raw.slice(m[0].length);
     return { frontmatter, body };
   } catch {
@@ -99,14 +99,32 @@ export function parseNote(
   }
 }
 
+export function parseNote(raw: string) {
+  return parseFrontmatter<NoteFrontmatter>(raw);
+}
+
+export function parseTopic(raw: string) {
+  return parseFrontmatter<TopicFrontmatter>(raw);
+}
+
+export function serialiseTopic(
+  frontmatter: TopicFrontmatter,
+  body: string,
+): string {
+  const fm = yaml.dump(frontmatter, { lineWidth: 100, noRefs: true });
+  return `---\n${fm}---\n\n${body.replace(/^\n+/, "")}`;
+}
+
 export function buildTopicMd(args: {
   topicSlug: string;
   topicTitle: string;
+  description?: string;
   scope?: string;
 }): string {
   const fm: TopicFrontmatter = {
     id: args.topicSlug,
     title: args.topicTitle,
+    description: args.description ?? "",
     created: new Date().toISOString(),
     status: "active",
     schema_version: SCHEMA_VERSION,

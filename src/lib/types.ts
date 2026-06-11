@@ -94,6 +94,10 @@ export interface NoteFrontmatter {
 export interface TopicFrontmatter {
   id: string;
   title: string;
+  // What this topic is for — the goal the user is exploring. Sent to the LLM
+  // so it can flag candidate notes as "gold" if they advance the goal AND
+  // aren't already covered by existing notes in the topic.
+  description: string;
   created: string;
   status: "active" | "archived";
   schema_version: number;
@@ -137,6 +141,9 @@ export type Msg =
       type: "COMMIT_NOTES";
       topic: string;
       topicTitle: string | null;
+      // Description seeded into topic.md when the topic is new. Ignored if
+      // topic already exists (existing topic.md is never clobbered).
+      topicDescription?: string;
       isNewTopic: boolean;
       includeTranscript: boolean;
       // Flat list of notes to commit. Each carries its own pre-assigned ULID
@@ -145,7 +152,10 @@ export type Msg =
       notes: { id: string; llmNote: LLMNote; parents: string[] }[];
     }
   | { type: "TEST_CONNECTION" }
-  | { type: "CREATE_REPO" };
+  | { type: "CREATE_REPO" }
+  | { type: "FETCH_TOPIC_DESCRIPTION"; topic: string }
+  | { type: "SAVE_TOPIC_DESCRIPTION"; topic: string; description: string }
+  | { type: "FETCH_TOPIC_NOTES_CONTENT"; topic: string };
 
 export interface CommittedNoteRef {
   id: string;

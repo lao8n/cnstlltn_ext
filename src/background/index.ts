@@ -66,6 +66,14 @@ async function handle(msg: Msg, sender: chrome.runtime.MessageSender) {
       return github.testConnection();
     case "CREATE_REPO":
       return github.createRepoIfMissing();
+    case "FETCH_TOPIC_DESCRIPTION": {
+      const md = await github.fetchTopicMd(msg.topic);
+      return { description: md?.frontmatter.description ?? "" };
+    }
+    case "SAVE_TOPIC_DESCRIPTION":
+      return github.updateTopicDescription(msg.topic, msg.description);
+    case "FETCH_TOPIC_NOTES_CONTENT":
+      return { notes: await github.fetchTopicNotesContent(msg.topic) };
   }
 }
 
@@ -137,6 +145,7 @@ async function runCommit(msg: Extract<Msg, { type: "COMMIT_NOTES" }>) {
       content: buildTopicMd({
         topicSlug: msg.topic,
         topicTitle: msg.topicTitle ?? msg.topic,
+        description: msg.topicDescription ?? "",
       }),
     });
   }

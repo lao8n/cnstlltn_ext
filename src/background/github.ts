@@ -1,5 +1,11 @@
 import { defaultAuth, type GitHubAuth } from "./auth";
-import { KB_PATHS, buildKbConfig, parseNote } from "@/lib/note";
+import {
+  KB_PATHS,
+  buildKbConfig,
+  parseNote,
+  parseTopic,
+  serialiseTopic,
+} from "@/lib/note";
 import type { CommittedNoteRef, CommitResult } from "@/lib/types";
 
 export interface FileToCommit {
@@ -187,6 +193,119 @@ export class GitHubClient {
       if (status === 404) return [];
       throw err;
     }
+  }
+
+  // Fetch notes' title + body (no frontmatter) for a topic. Used as LLM
+  // context when scoring candidate notes against existing coverage. Keeping
+  // it to body only minimizes tokens — frontmatter (id, hashes, timestamps)
+  // adds nothing semantically.
+  async fetchTopicNotesContent(
+    topic: string,
+  ): Promise<{ id: string; title: string; content: string }[]> {
+    const octokit = await this.auth.getOctokit();
+    const { owner, repo, branch } = await this.auth.getOwnerRepo();
+    try {
+      const { data } = await octokit.rest.repos.getContent({
+        owner,
+        repo,
+        path: KB_PATHS.notesDir(topic),
+        ref: branch,
+      });
+      if (!Array.isArray(data)) return [];
+      const files = data.filter(
+        (d) => d.type === "file" && d.name.endsWith(".md"),
+      );
+      const results = await Promise.all(
+        files.map(async (f) => {
+          try {
+            const { data: fileData } = await octokit.rest.repos.getContent({
+              owner,
+              repo,
+              path: f.path,
+              ref: branch,
+            });
+            if (Array.isArray(fileData) || fileData.type !== "file") return null;
+            const raw = atob(fileData.content.replace(/\n/g, ""));
+            const parsed = parseNote(raw);
+            if (!parsed) return null;
+            return {
+              id: parsed.frontmatter.id,
+              title: parsed.frontmatter.title,
+              content: parsed.body.trim(),
+            };
+          } catch {
+            return null;
+          }
+        }),
+      );
+      return results.filter((r): r is NonNullable<typeof r> => r !== null);
+    } catch (err) {
+      if (isMissingPathError(err)) return [];
+      throw err;
+    }
+  }
+
+  // Fetch topic.md (parsed). Returns null if it doesn't exist.
+  async fetchTopicMd(topic: string): Promise<
+    | {
+        frontmatter: import("@/lib/types").TopicFrontmatter;
+        body: string;
+        sha: string;
+      }
+    | null
+  > {
+    const octokit = await this.auth.getOctokit();
+    const { owner, repo, branch } = await this.auth.getOwnerRepo();
+    try {
+      const { data } = await octokit.rest.repos.getContent({
+        owner,
+        repo,
+        path: KB_PATHS.topicMd(topic),
+        ref: branch,
+      });
+      if (Array.isArray(data) || data.type !== "file") return null;
+      const raw = atob(data.content.replace(/\n/g, ""));
+      const parsed = parseTopic(raw);
+      if (!parsed) return null;
+      return { ...parsed, sha: data.sha };
+    } catch (err) {
+      if (isMissingPathError(err)) return null;
+      throw err;
+    }
+  }
+
+  // Rewrite topic.md's description field in-place via the Contents API.
+  // Preserves all other frontmatter and the body. If topic.md doesn't exist
+  // yet, returns false — the caller should defer description-saving until
+  // the first commit creates the topic.
+  async updateTopicDescription(
+    topic: string,
+    description: string,
+  ): Promise<{ ok: boolean; message: string }> {
+    const octokit = await this.auth.getOctokit();
+    const { owner, repo, branch } = await this.auth.getOwnerRepo();
+    const existing = await this.fetchTopicMd(topic);
+    if (!existing) {
+      return {
+        ok: false,
+        message:
+          "Topic doesn't exist on GitHub yet — description will be saved on first commit.",
+      };
+    }
+    const updated = serialiseTopic(
+      { ...existing.frontmatter, description },
+      existing.body,
+    );
+    await octokit.rest.repos.createOrUpdateFileContents({
+      owner,
+      repo,
+      branch,
+      path: KB_PATHS.topicMd(topic),
+      message: `topic(${topic}): update description`,
+      content: utf8ToBase64(updated),
+      sha: existing.sha,
+    });
+    return { ok: true, message: "Description saved." };
   }
 
   async commitFiles(args: {

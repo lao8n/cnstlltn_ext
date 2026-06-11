@@ -38,6 +38,14 @@ interface State {
   selectedTopic: string;
   newTopicTitle: string;
   isNewTopic: boolean;
+  // Description of the currently picked/created topic. For existing topics,
+  // loaded from topic.md's frontmatter when the topic is selected. For new
+  // topics, empty until the user types one, then persisted on first commit
+  // (because topic.md doesn't exist yet — see SAVE_TOPIC_DESCRIPTION).
+  currentTopicDescription: string;
+  // Last description that's actually saved to GitHub (or "" for a new topic).
+  // Used to detect dirty state for the Save button.
+  savedTopicDescription: string;
   drillStack: DrillFrame[];
   commitBanner: CommitBanner | null;
   notesForTopic: { id: string; title: string; path: string }[];
@@ -52,6 +60,8 @@ interface Actions {
   pickTopic: (t: string) => void;
   setNewTopicTitle: (t: string) => void;
   setIsNewTopic: (b: boolean) => void;
+  setCurrentTopicDescription: (d: string) => void;
+  setSavedTopicDescription: (d: string) => void;
   // Replace the drill stack entirely (used when we regenerate root candidates).
   setRootFrame: (candidates: LLMNote[]) => void;
   pushDrillFrame: (frame: DrillFrame) => void;
@@ -92,6 +102,8 @@ export const useStore = create<State & Actions>((set) => ({
   selectedTopic: "",
   newTopicTitle: "",
   isNewTopic: false,
+  currentTopicDescription: "",
+  savedTopicDescription: "",
   drillStack: [],
   commitBanner: null,
   notesForTopic: [],
@@ -102,9 +114,20 @@ export const useStore = create<State & Actions>((set) => ({
   setSession: (session) => set({ session }),
   setTopics: (topics) => set({ topics }),
   pickTopic: (selectedTopic) =>
-    set({ selectedTopic, isNewTopic: false, newTopicTitle: "" }),
+    set({
+      selectedTopic,
+      isNewTopic: false,
+      newTopicTitle: "",
+      // Clear description when switching topic — caller will re-fetch.
+      currentTopicDescription: "",
+      savedTopicDescription: "",
+    }),
   setNewTopicTitle: (newTopicTitle) => set({ newTopicTitle }),
   setIsNewTopic: (isNewTopic) => set({ isNewTopic }),
+  setCurrentTopicDescription: (currentTopicDescription) =>
+    set({ currentTopicDescription }),
+  setSavedTopicDescription: (savedTopicDescription) =>
+    set({ savedTopicDescription }),
   setRootFrame: (candidates) =>
     set({
       commitBanner: null,

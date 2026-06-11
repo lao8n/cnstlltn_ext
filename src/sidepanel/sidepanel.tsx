@@ -189,10 +189,13 @@ function App() {
         type: "COMMIT_NOTES",
         topic,
         topicTitle: s.isNewTopic ? s.newTopicTitle.trim() || topic : null,
+        topicDescription: s.currentTopicDescription || undefined,
         isNewTopic: s.isNewTopic,
         includeTranscript: true,
         notes,
       });
+      // Once committed, the description is now persisted on GitHub.
+      s.setSavedTopicDescription(s.currentTopicDescription);
       s.setCommitBanner({
         count: result.noteRefs.length,
         url: result.url,
@@ -265,9 +268,46 @@ function App() {
           topics={s.topics}
           selectedTopic={s.selectedTopic}
           newTopicTitle={s.newTopicTitle}
-          onPick={(t) => s.pickTopic(t)}
+          isNewTopic={s.isNewTopic}
+          currentTopicDescription={s.currentTopicDescription}
+          savedTopicDescription={s.savedTopicDescription}
+          onPick={async (t) => {
+            s.pickTopic(t);
+            // Load existing description for the picked topic.
+            try {
+              const { description } = await send<{ description: string }>({
+                type: "FETCH_TOPIC_DESCRIPTION",
+                topic: t,
+              });
+              s.setCurrentTopicDescription(description);
+              s.setSavedTopicDescription(description);
+            } catch (err) {
+              console.warn("FETCH_TOPIC_DESCRIPTION failed", err);
+            }
+          }}
           onSetIsNew={(b) => s.setIsNewTopic(b)}
           onChangeNewTitle={(t) => s.setNewTopicTitle(t)}
+          onChangeDescription={(d) => s.setCurrentTopicDescription(d)}
+          onSaveDescription={async () => {
+            const slug = effectiveTopic(s);
+            if (!slug) return;
+            try {
+              const result = await send<{ ok: boolean; message: string }>({
+                type: "SAVE_TOPIC_DESCRIPTION",
+                topic: slug,
+                description: s.currentTopicDescription,
+              });
+              if (result.ok) {
+                s.setSavedTopicDescription(s.currentTopicDescription);
+              } else {
+                // topic.md doesn't exist yet — defer to first commit. We still
+                // treat the typed description as "current"; commit will persist it.
+                s.setSavedTopicDescription(s.currentTopicDescription);
+              }
+            } catch (err) {
+              s.setError(friendlyError((err as Error).message));
+            }
+          }}
           onGenerate={onGenerate}
         />
       )}
@@ -349,12 +389,22 @@ function TopicPicker(props: {
   topics: string[];
   selectedTopic: string;
   newTopicTitle: string;
-  onPick: (slug: string) => void;
+  isNewTopic: boolean;
+  currentTopicDescription: string;
+  savedTopicDescription: string;
+  onPick: (slug: string) => void | Promise<void>;
   onSetIsNew: (b: boolean) => void;
   onChangeNewTitle: (t: string) => void;
+  onChangeDescription: (d: string) => void;
+  onSaveDescription: () => void | Promise<void>;
   onGenerate: () => void;
 }) {
   const hasNewTitle = props.newTopicTitle.trim().length > 0;
+  // Show the description editor once a topic is selected (existing) or
+  // being created (new). Hide it before the user has picked anything.
+  const showDescription = Boolean(props.selectedTopic) || hasNewTitle;
+  const descriptionDirty =
+    props.currentTopicDescription !== props.savedTopicDescription;
   return (
     <div className="space-y-3">
       {props.topics.length > 0 && (
@@ -411,6 +461,37 @@ function TopicPicker(props: {
           return null;
         })()}
       </div>
+      {showDescription && (
+        <div className="space-y-1">
+          <label className="block text-xs font-medium opacity-80">
+            What is the goal of this topic?
+          </label>
+          <textarea
+            className="nt-input"
+            rows={3}
+            placeholder="e.g. Understand the realist-vs-liberal debate on Russia-Ukraine. Used by the LLM to flag candidate notes as 'gold' when they advance this goal and aren't already covered."
+            value={props.currentTopicDescription}
+            onChange={(e) => props.onChangeDescription(e.target.value)}
+          />
+          <div className="flex justify-between items-center">
+            <span className="text-xs opacity-60">
+              {props.isNewTopic
+                ? "Saved with topic.md on first commit."
+                : descriptionDirty
+                  ? "Unsaved change."
+                  : "Saved."}
+            </span>
+            {!props.isNewTopic && descriptionDirty && (
+              <button
+                className="text-xs underline opacity-80 hover:opacity-100"
+                onClick={() => void props.onSaveDescription()}
+              >
+                Save description
+              </button>
+            )}
+          </div>
+        </div>
+      )}
       <button
         className="nt-btn nt-btn-primary w-full"
         onClick={props.onGenerate}
