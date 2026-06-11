@@ -139,6 +139,11 @@ export type Msg =
       // notes that advance the goal and aren't already covered.
       topicGoal?: string | null;
       existingNotes?: { title: string; content: string }[] | null;
+      // Optional time window: when set, only transcript cues overlapping
+      // [startSeconds, endSeconds] are sent to the LLM. Saves tokens and
+      // focuses the model on a specific stretch of a long video.
+      startSeconds?: number | null;
+      endSeconds?: number | null;
     }
   | {
       type: "GENERATE_DRILL";

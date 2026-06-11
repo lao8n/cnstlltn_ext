@@ -91,8 +91,18 @@ async function onTranscriptReady(
 async function runGenerateRoot(msg: Extract<Msg, { type: "GENERATE_ROOT" }>) {
   const session = await getSession<SessionPayload>();
   if (!session) throw new Error("No active transcript session.");
+  // Restrict cues to the user-chosen time window if one was set. Cues that
+  // overlap the window edges (start_seconds <= window end AND end_seconds
+  // >= window start) are kept so we never cut a sentence in half.
+  let cues = session.cues;
+  if (msg.startSeconds != null || msg.endSeconds != null) {
+    const lo = msg.startSeconds ?? 0;
+    const hi = msg.endSeconds ?? Number.POSITIVE_INFINITY;
+    cues = cues.filter((c) => c.endSeconds >= lo && c.startSeconds <= hi);
+    if (cues.length === 0) cues = session.cues; // safety: don't ship empty
+  }
   const notes = await generateRootNotes({
-    cues: session.cues,
+    cues,
     videoTitle: session.videoMeta.title,
     channel: session.videoMeta.channel,
     topicGoal: msg.topicGoal ?? null,

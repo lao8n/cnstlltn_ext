@@ -49,6 +49,10 @@ interface State {
   drillStack: DrillFrame[];
   commitBanner: CommitBanner | null;
   notesForTopic: { id: string; title: string; path: string }[];
+  // User-chosen subset of the current video to send to the LLM. null = use
+  // the full video. Reset when the active video changes.
+  rangeStartSeconds: number | null;
+  rangeEndSeconds: number | null;
 }
 
 interface Actions {
@@ -62,6 +66,7 @@ interface Actions {
   setIsNewTopic: (b: boolean) => void;
   setCurrentTopicDescription: (d: string) => void;
   setSavedTopicDescription: (d: string) => void;
+  setRange: (start: number | null, end: number | null) => void;
   // Replace the drill stack entirely (used when we regenerate root candidates).
   setRootFrame: (candidates: LLMNote[]) => void;
   pushDrillFrame: (frame: DrillFrame) => void;
@@ -107,6 +112,8 @@ export const useStore = create<State & Actions>((set) => ({
   drillStack: [],
   commitBanner: null,
   notesForTopic: [],
+  rangeStartSeconds: null,
+  rangeEndSeconds: null,
 
   setPhase: (phase) => set({ phase }),
   setError: (errorMessage) => set({ errorMessage }),
@@ -128,6 +135,8 @@ export const useStore = create<State & Actions>((set) => ({
     set({ currentTopicDescription }),
   setSavedTopicDescription: (savedTopicDescription) =>
     set({ savedTopicDescription }),
+  setRange: (rangeStartSeconds, rangeEndSeconds) =>
+    set({ rangeStartSeconds, rangeEndSeconds }),
   setRootFrame: (candidates) =>
     set({
       commitBanner: null,

@@ -61,6 +61,7 @@ function App() {
       prevVideoId != null && prevVideoId !== session.videoMeta.videoId;
     if (videoChanged) {
       s.clearStack();
+      s.setRange(null, null);
       s.setPhase("topic-picker");
     }
     const phase = useStore.getState().phase;
@@ -121,6 +122,8 @@ function App() {
         topic,
         topicGoal: goal || null,
         existingNotes,
+        startSeconds: s.rangeStartSeconds,
+        endSeconds: s.rangeEndSeconds,
       });
       s.setRootFrame(notes);
       s.setPhase("candidates");
@@ -308,6 +311,10 @@ function App() {
           isNewTopic={s.isNewTopic}
           currentTopicDescription={s.currentTopicDescription}
           savedTopicDescription={s.savedTopicDescription}
+          durationSeconds={s.session?.videoMeta.durationSeconds ?? null}
+          rangeStartSeconds={s.rangeStartSeconds}
+          rangeEndSeconds={s.rangeEndSeconds}
+          onChangeRange={(start, end) => s.setRange(start, end)}
           onPick={async (t) => {
             s.pickTopic(t);
             // Load existing description for the picked topic.
@@ -429,6 +436,10 @@ function TopicPicker(props: {
   isNewTopic: boolean;
   currentTopicDescription: string;
   savedTopicDescription: string;
+  durationSeconds: number | null;
+  rangeStartSeconds: number | null;
+  rangeEndSeconds: number | null;
+  onChangeRange: (start: number | null, end: number | null) => void;
   onPick: (slug: string) => void | Promise<void>;
   onSetIsNew: (b: boolean) => void;
   onChangeNewTitle: (t: string) => void;
@@ -529,12 +540,82 @@ function TopicPicker(props: {
           </div>
         </div>
       )}
+      {props.durationSeconds && props.durationSeconds > 0 && (
+        <RangeSlider
+          durationSeconds={props.durationSeconds}
+          startSeconds={props.rangeStartSeconds}
+          endSeconds={props.rangeEndSeconds}
+          onChange={props.onChangeRange}
+        />
+      )}
       <button
         className="nt-btn nt-btn-primary w-full"
         onClick={props.onGenerate}
       >
         Generate notes from this video
       </button>
+    </div>
+  );
+}
+
+// Dual-handle range slider over the video's full duration. Two stacked
+// <input type="range"> elements share min=0, max=duration; we enforce
+// start < end on every change. Null start/end mean "use full video".
+function RangeSlider(props: {
+  durationSeconds: number;
+  startSeconds: number | null;
+  endSeconds: number | null;
+  onChange: (start: number | null, end: number | null) => void;
+}) {
+  const total = props.durationSeconds;
+  const start = props.startSeconds ?? 0;
+  const end = props.endSeconds ?? total;
+  const isFull = start === 0 && end === total;
+  return (
+    <div className="space-y-1">
+      <div className="flex justify-between items-center">
+        <label className="block text-xs font-medium opacity-80">
+          Video range to send to the LLM
+        </label>
+        {!isFull && (
+          <button
+            className="text-xs underline opacity-70 hover:opacity-100"
+            onClick={() => props.onChange(null, null)}
+          >
+            reset to full video
+          </button>
+        )}
+      </div>
+      <div className="text-xs opacity-70">
+        {formatTs(start)} – {formatTs(end)}
+        {isFull ? " (full video)" : ""}
+      </div>
+      <input
+        type="range"
+        min={0}
+        max={total}
+        step={1}
+        value={start}
+        onChange={(e) => {
+          const v = Math.min(parseInt(e.target.value, 10), end - 1);
+          props.onChange(v === 0 && end === total ? null : v, end === total && v === 0 ? null : end);
+        }}
+        className="w-full"
+        aria-label="Range start"
+      />
+      <input
+        type="range"
+        min={0}
+        max={total}
+        step={1}
+        value={end}
+        onChange={(e) => {
+          const v = Math.max(parseInt(e.target.value, 10), start + 1);
+          props.onChange(start === 0 && v === total ? null : start, v === total && start === 0 ? null : v);
+        }}
+        className="w-full"
+        aria-label="Range end"
+      />
     </div>
   );
 }
