@@ -1,4 +1,4 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { ulid } from "ulid";
 import "@/index.css";
@@ -67,7 +67,12 @@ function App() {
     const inWorkflow = ["generating", "candidates", "committing"].includes(
       phase,
     );
-    if (phase === "loading" || videoChanged) {
+    // We're "arriving" at a usable session when we were waiting (loading / no
+    // active video yet) or the video just changed. This is also the case when
+    // a session is stored *after* the panel first rendered "no-session": the
+    // storage listener re-runs bootstrap, and we must leave that screen.
+    const arriving = phase === "loading" || phase === "no-session" || videoChanged;
+    if (arriving) {
       try {
         const topics = await send<string[]>({ type: "LIST_TOPICS" });
         s.setTopics(topics);
@@ -76,9 +81,7 @@ function App() {
         s.setTopics([]);
       }
     }
-    if (phase === "loading") {
-      s.setPhase("topic-picker");
-    } else if (videoChanged) {
+    if (arriving) {
       s.setPhase("topic-picker");
     } else if (!inWorkflow && phase === "error") {
       // Session refreshed while idle — stay on topic picker.
@@ -274,7 +277,7 @@ function App() {
 
       {s.phase === "generating" && (
         <div className="opacity-70">
-          Generating notes from transcript… (this can take 10–30s)
+          Generating notes from transcript<AnimatedDots />
         </div>
       )}
 
@@ -329,6 +332,20 @@ function App() {
 
       <Styles />
     </div>
+  );
+}
+
+function AnimatedDots() {
+  const [count, setCount] = useState(1);
+  useEffect(() => {
+    const id = setInterval(() => setCount((c) => (c % 3) + 1), 400);
+    return () => clearInterval(id);
+  }, []);
+  // Reserve width for the longest state ("...") so the text doesn't jiggle.
+  return (
+    <span className="inline-block w-[1.5ch] text-left">
+      {".".repeat(count)}
+    </span>
   );
 }
 
