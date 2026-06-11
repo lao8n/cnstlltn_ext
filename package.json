@@ -27,6 +27,7 @@
   "dependencies": {
     "@google/genai": "^2.6.0",
     "@octokit/rest": "^22.0.1",
+    "@radix-ui/react-slider": "^1.4.0",
     "gray-matter": "^4.0.3",
     "js-yaml": "^4.1.1",
     "react": "^19.2.6",

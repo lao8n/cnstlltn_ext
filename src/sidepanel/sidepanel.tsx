@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { ulid } from "ulid";
+import * as Slider from "@radix-ui/react-slider";
 import "@/index.css";
 import { getSettings } from "@/lib/storage";
 import type {
@@ -576,8 +577,8 @@ function TopicPicker(props: {
 }
 
 // Dual-handle range slider over the video's full duration. Two stacked
-// <input type="range"> elements share min=0, max=duration; we enforce
-// start < end on every change. Null start/end mean "use full video".
+// Single-track dual-thumb slider (Radix). minStepsBetweenThumbs keeps
+// start < end; null start/end mean "use full video".
 function RangeSlider(props: {
   durationSeconds: number;
   startSeconds: number | null;
@@ -607,32 +608,30 @@ function RangeSlider(props: {
         {formatTs(start)} – {formatTs(end)}
         {isFull ? " (full video)" : ""}
       </div>
-      <input
-        type="range"
+      <Slider.Root
+        className="relative flex items-center select-none touch-none w-full h-5"
         min={0}
         max={total}
         step={1}
-        value={start}
-        onChange={(e) => {
-          const v = Math.min(parseInt(e.target.value, 10), end - 1);
-          props.onChange(v === 0 && end === total ? null : v, end === total && v === 0 ? null : end);
+        minStepsBetweenThumbs={1}
+        value={[start, end]}
+        onValueChange={([s, e]) => {
+          if (s === 0 && e === total) props.onChange(null, null);
+          else props.onChange(s, e);
         }}
-        className="w-full"
-        aria-label="Range start"
-      />
-      <input
-        type="range"
-        min={0}
-        max={total}
-        step={1}
-        value={end}
-        onChange={(e) => {
-          const v = Math.max(parseInt(e.target.value, 10), start + 1);
-          props.onChange(start === 0 && v === total ? null : start, v === total && start === 0 ? null : v);
-        }}
-        className="w-full"
-        aria-label="Range end"
-      />
+      >
+        <Slider.Track className="relative grow h-1 rounded-full bg-black/15 dark:bg-white/20">
+          <Slider.Range className="absolute h-full rounded-full bg-blue-500" />
+        </Slider.Track>
+        <Slider.Thumb
+          className="block w-4 h-4 rounded-full bg-blue-500 shadow ring-1 ring-black/10 focus:outline-none focus:ring-2 focus:ring-blue-400"
+          aria-label="Range start"
+        />
+        <Slider.Thumb
+          className="block w-4 h-4 rounded-full bg-blue-500 shadow ring-1 ring-black/10 focus:outline-none focus:ring-2 focus:ring-blue-400"
+          aria-label="Range end"
+        />
+      </Slider.Root>
     </div>
   );
 }
