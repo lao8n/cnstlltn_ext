@@ -177,7 +177,7 @@ function App() {
     const topic = effectiveTopic(s);
     if (!topic) return;
     if (s.drillStack.length === 0) return;
-    const notes = buildCommitNotes(s.drillStack);
+    const notes = buildCommitNotes(s.drillStack[0] ?? null);
     if (notes.length === 0) {
       s.setError("Tick at least one note to save it.");
       return;
@@ -431,10 +431,8 @@ function CandidateList(props: {
 }) {
   const frame = props.stack[props.stack.length - 1];
   const depth = props.stack.length - 1; // 0 = root
-  const totalSelected = props.stack.reduce(
-    (n, f) => n + f.selectedIdxs.size,
-    0,
-  );
+  // Walk the whole drill tree so selections on un-navigated branches still count.
+  const totalSelected = countSelectedInTree(props.stack[0] ?? null);
 
   return (
     <div className="space-y-3">
@@ -573,52 +571,77 @@ function effectiveTopic(s: ReturnType<typeof useStore.getState>): string {
   return s.selectedTopic;
 }
 
-// Walk the drill stack and produce the flat list of notes to commit.
-// Each ticked candidate becomes a commit note. Its `parents` is set to the
+// Walk the whole drill tree (rooted at drillStack[0]) and produce the flat
+// list of notes to commit. Every ticked candidate anywhere in the tree is
+// emitted, not just the ones on the current path. parents is set to the
 // nearest ticked ancestor on the drill chain (or [] if none ticked above).
 // IDs are stable across drilled-into candidates: if you tick the same note
 // you also drilled into, the saved note's ID matches its descendants' parents.
 function buildCommitNotes(
-  stack: DrillFrame[],
+  root: DrillFrame | null,
 ): Array<{ id: string; llmNote: LLMNote; parents: string[] }> {
-  // Map: candidate LLMNote reference → its committed ID
+  if (!root) return [];
+
+  // First pass: any candidate that was drilled into already has a stable
+  // pre-assigned ULID stored as child.parent.id. Map LLMNote → id so that
+  // if the user also tickets the drilled-into candidate, the saved note
+  // uses the same id its descendants reference in their parents[] array.
   const idForCandidate = new Map<LLMNote, string>();
-  // Pre-populate IDs for drilled-into candidates (already have pre-assigned IDs)
-  for (let d = 1; d < stack.length; d++) {
-    const parent = stack[d].parent;
-    if (parent) idForCandidate.set(parent.llmNote, parent.id);
-  }
-
-  const result: Array<{ id: string; llmNote: LLMNote; parents: string[] }> = [];
-
-  for (let d = 0; d < stack.length; d++) {
-    const frame = stack[d];
-    const idxs = Array.from(frame.selectedIdxs).sort((a, b) => a - b);
-    for (const idx of idxs) {
-      const llmNote = frame.candidates[idx];
-      const id = idForCandidate.get(llmNote) ?? ulid();
-      if (!idForCandidate.has(llmNote)) idForCandidate.set(llmNote, id);
-
-      // Find nearest ticked ancestor in the drill chain.
-      let parentId: string | null = null;
-      for (let p = d - 1; p >= 0; p--) {
-        const drilledInto = stack[p + 1]?.parent;
-        if (!drilledInto) continue;
-        const idxInP = stack[p].candidates.indexOf(drilledInto.llmNote);
-        if (idxInP >= 0 && stack[p].selectedIdxs.has(idxInP)) {
-          parentId = drilledInto.id;
-          break;
-        }
+  const assignIds = (frame: DrillFrame) => {
+    for (const [idxStr, child] of Object.entries(frame.childrenByCandidateIdx)) {
+      const idx = Number(idxStr);
+      const candidate = frame.candidates[idx];
+      if (candidate && child.parent) {
+        idForCandidate.set(candidate, child.parent.id);
       }
+      assignIds(child);
+    }
+  };
+  assignIds(root);
 
+  // Second pass: walk the tree and emit every ticked candidate.
+  const result: Array<{ id: string; llmNote: LLMNote; parents: string[] }> = [];
+  type Ancestor = { id: string; ticked: boolean };
+  const walk = (frame: DrillFrame, chain: Ancestor[]) => {
+    const nearestTicked =
+      [...chain].reverse().find((a) => a.ticked)?.id ?? null;
+    const sortedIdxs = Array.from(frame.selectedIdxs).sort((a, b) => a - b);
+    for (const idx of sortedIdxs) {
+      const llmNote = frame.candidates[idx];
+      if (!llmNote) continue;
+      let id = idForCandidate.get(llmNote);
+      if (!id) {
+        id = ulid();
+        idForCandidate.set(llmNote, id);
+      }
       result.push({
         id,
         llmNote,
-        parents: parentId ? [parentId] : [],
+        parents: nearestTicked ? [nearestTicked] : [],
       });
     }
-  }
+    for (const [idxStr, child] of Object.entries(frame.childrenByCandidateIdx)) {
+      const idx = Number(idxStr);
+      const drilledInto = frame.candidates[idx];
+      if (!drilledInto || !child.parent) continue;
+      walk(child, [
+        ...chain,
+        { id: child.parent.id, ticked: frame.selectedIdxs.has(idx) },
+      ]);
+    }
+  };
+  walk(root, []);
   return result;
+}
+
+// Total ticked across the entire drill tree (not just the current path).
+function countSelectedInTree(root: DrillFrame | null): number {
+  if (!root) return 0;
+  let n = root.selectedIdxs.size;
+  for (const child of Object.values(root.childrenByCandidateIdx)) {
+    n += countSelectedInTree(child);
+  }
+  return n;
 }
 
 // Convert raw provider errors into something the user can act on.
