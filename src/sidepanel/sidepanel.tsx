@@ -681,9 +681,8 @@ function CandidateList(props: {
               className={
                 "relative rounded border px-3 py-2 pr-9 cursor-pointer transition-colors " +
                 (selected
-                  ? gold
-                    ? "bg-amber-900 text-amber-50 border-amber-700 dark:bg-amber-100 dark:text-amber-950 dark:border-amber-300"
-                    : "bg-slate-900 text-slate-50 border-slate-900 dark:bg-slate-100 dark:text-slate-900 dark:border-slate-100"
+                  ? // selection colour is the same blue whether or not the note is gold
+                    "bg-blue-600 text-white border-blue-600 dark:bg-blue-600 dark:text-white dark:border-blue-500"
                   : gold
                     ? "bg-amber-100 text-amber-950 border-amber-300 hover:bg-amber-200 dark:bg-amber-950 dark:text-amber-100 dark:border-amber-800 dark:hover:bg-amber-900"
                     : "border-slate-300 hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800")
@@ -708,7 +707,7 @@ function CandidateList(props: {
                 className={
                   "absolute top-1.5 right-2 text-lg font-semibold leading-none px-1 rounded " +
                   (selected
-                    ? "text-slate-50 hover:bg-slate-700 dark:text-slate-900 dark:hover:bg-slate-300"
+                    ? "text-white hover:bg-blue-700"
                     : "opacity-60 hover:opacity-100 hover:bg-slate-200 dark:hover:bg-slate-700")
                 }
               >

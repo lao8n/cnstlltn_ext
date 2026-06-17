@@ -9,7 +9,7 @@ Rules:
 - Each note is a single self-contained idea: argument, fact, definition, counter-argument, illustrative example, or open question.
 - Notes must be drawn from what is actually said in the transcript. Do not invent.
 - Note bodies are plain prose markdown. No leading heading. No bullet/number prefix. No filler like "the speaker says".
-- LENGTH: each note body must be substantial — roughly 8–12 sentences. Cover the claim, supporting evidence, reasoning, nuance, and any caveats or qualifications stated in the transcript. Do not stop at a one- or two-sentence summary.
+- LENGTH: keep each note concise — roughly 80–100 words (about 4–6 sentences), and never more than ~120 words. Capture the core claim plus its single most important piece of supporting evidence, reasoning, or caveat from the transcript. Omit padding and restatement; a tight note is better than an exhaustive one.
 - When a direct quote sharpens the note, include one or two inline in quotation marks.
 - Tags are short lowercase keywords useful for clustering (3-6 per note).
 - TIMESTAMPS: start_seconds and end_seconds MUST be copied from the transcript line markers — use the integer inside (Ns) on the FIRST line the note draws from for start_seconds, and the integer on the LAST line for end_seconds. end_seconds must be greater than start_seconds. Never guess wall-clock times; never set start_seconds equal to end_seconds unless the note truly comes from a single cue line.
@@ -24,15 +24,15 @@ const DRILL_SYSTEM_PROMPT = `You are expanding a single note from a knowledge ba
 Rules:
 - Produce 3-8 sub-notes that each cover detail the parent note compresses or omits.
 - Sub-notes obey the same atomicity and formatting rules as the original notes (plain prose, no headings, no bullet prefixes, direct quotes when sharp).
-- LENGTH: each sub-note body must be substantial — roughly 6–10 sentences of detailed prose drawn from the transcript. Do not produce thin one- or two-sentence summaries.
+- LENGTH: keep each sub-note concise — roughly 60–80 words (about 3–5 sentences), and never more than ~100 words. Focus on one specific detail drawn from the transcript; omit padding.
 - TIMESTAMPS: copy start_seconds and end_seconds from the (Ns) markers on the first and last transcript lines each sub-note uses. end_seconds must exceed start_seconds and both must fall inside the parent's range.
 - HARD CONSTRAINT: every sub-note's [start_seconds, end_seconds] must fall within the parent's range. Siblings may overlap each other but must all sit inside the parent's window.
 - flag is true if a sub-note itself has more detail in the transcript worth drilling into further.
 - gold: set to true ONLY when a TOPIC GOAL is provided AND the sub-note clearly (a) advances that goal AND (b) is not substantially covered by any note in the EXISTING NOTES list. Otherwise false.
 - Do not restate the parent note. Each sub-note must add something the parent does not already say.`;
 
-const MIN_ROOT_SENTENCES = 8;
-const MIN_DRILL_SENTENCES = 6;
+const MIN_ROOT_WORDS = 50;
+const MIN_DRILL_WORDS = 35;
 
 const NOTE_PROPS = {
   title: {
@@ -42,7 +42,7 @@ const NOTE_PROPS = {
   content: {
     type: Type.STRING,
     description:
-      "Detailed note body: 8-12 full sentences (~150-250 words). Plain prose markdown. Never a one- or two-sentence summary.",
+      "Concise note body: ~80-100 words (about 4-6 sentences), never more than ~120. Plain prose markdown. Core idea plus key support; no padding.",
   },
   claim_type: {
     type: Type.STRING,
@@ -110,31 +110,28 @@ async function getClient(): Promise<GoogleGenAI> {
   return new GoogleGenAI({ apiKey: geminiApiKey });
 }
 
-function countSentences(text: string): number {
-  return text
-    .split(/(?<=[.!?])\s+/)
-    .map((s) => s.trim())
-    .filter((s) => s.length > 12).length;
+function countWords(text: string): number {
+  return text.trim().split(/\s+/).filter(Boolean).length;
 }
 
-function notesTooShort(notes: LLMNote[], minSentences: number): boolean {
-  return notes.some((n) => countSentences(n.content) < minSentences);
+function notesTooShort(notes: LLMNote[], minWords: number): boolean {
+  return notes.some((n) => countWords(n.content) < minWords);
 }
 
 async function callNoteGenerator(args: {
   systemPrompt: string;
   userPrompt: string;
   model: string;
-  minSentences: number;
+  minWords: number;
 }): Promise<LLMNote[]> {
   const ai = await getClient();
   let userPrompt = args.userPrompt;
   let lastNotes: LLMNote[] | null = null;
 
-  // We strongly request long notes in the prompt and give the model one retry
-  // nudge if it comes back short. Length is a soft preference, not a hard
-  // requirement — if the model still returns shorter notes we use them anyway
-  // rather than failing the whole run.
+  // We request concise notes in the prompt and give the model one retry nudge
+  // only if a note comes back implausibly thin. Length is a soft preference,
+  // not a hard requirement — if the model still returns a short note we use it
+  // anyway rather than failing the whole run.
   for (let attempt = 0; attempt < 2; attempt++) {
     const response = await ai.models.generateContent({
       model: args.model,
@@ -150,12 +147,12 @@ async function callNoteGenerator(args: {
     const parsed = JSON.parse(raw);
     const validated = LLMNotes.parse(parsed);
     lastNotes = validated.notes;
-    if (!notesTooShort(validated.notes, args.minSentences)) {
+    if (!notesTooShort(validated.notes, args.minWords)) {
       return validated.notes;
     }
     userPrompt =
       args.userPrompt +
-      `\n\nRETRY — your previous output was too short. Every "content" field MUST be at least ${args.minSentences} complete sentences (~150+ words each). Expand with reasoning, evidence, quotes, and nuance from the transcript. Do not return one- or two-sentence summaries.`;
+      `\n\nRETRY — some notes were too thin. Every "content" field MUST be at least ${args.minWords} words of substantive prose (the core claim plus its key support or caveat). Stay concise — do not pad — but do not return one-line summaries.`;
   }
 
   // Still short after the retry nudge — accept what we have instead of erroring.
@@ -202,14 +199,14 @@ ${transcriptText}
 
 Produce candidate notes following the rules in the system message.
 
-CRITICAL: each note "content" must be 8-12 full sentences (~150-250 words). One-sentence summaries are not acceptable.
+CRITICAL: keep each note "content" concise — about 80–100 words (4–6 sentences) and no more than ~120 words. Capture the core idea, not an exhaustive summary.
 
 TIMESTAMPS: for each note, set start_seconds and end_seconds from the (Ns) integers on the first and last transcript lines you used — not from [mm:ss] display times.${goldContextBlock(args)}`;
   const notes = await callNoteGenerator({
     systemPrompt: ROOT_SYSTEM_PROMPT,
     userPrompt,
     model,
-    minSentences: MIN_ROOT_SENTENCES,
+    minWords: MIN_ROOT_WORDS,
   });
   return refineNoteTimestamps(notes, args.cues);
 }
@@ -250,7 +247,7 @@ ${transcriptText}
 
 Produce sub-notes drilling into the parent, following the rules in the system message.
 
-CRITICAL: each sub-note "content" must be 6-10 full sentences (~120-200 words). One-sentence summaries are not acceptable.
+CRITICAL: keep each sub-note "content" concise — about 60–80 words (3–5 sentences) and no more than ~100 words.
 
 TIMESTAMPS: copy (Ns) integers from the transcript lines — stay inside [${args.parentStartSeconds}, ${args.parentEndSeconds}].${goldContextBlock(args)}`;
   const slicedForSnap = slicedCues.length ? slicedCues : args.cues;
@@ -258,7 +255,7 @@ TIMESTAMPS: copy (Ns) integers from the transcript lines — stay inside [${args
     systemPrompt: DRILL_SYSTEM_PROMPT,
     userPrompt,
     model,
-    minSentences: MIN_DRILL_SENTENCES,
+    minWords: MIN_DRILL_WORDS,
   });
   return refineNoteTimestamps(notes, slicedForSnap, {
     minSeconds: args.parentStartSeconds,
