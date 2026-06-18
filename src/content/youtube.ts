@@ -542,6 +542,39 @@ async function extractTranscript(): Promise<{
   );
 }
 
+// Cheap metadata read — NO transcript panel, no scraping. Used to keep the
+// side panel's displayed video in sync as the user navigates between videos.
+async function readVideoMetaCheap(): Promise<VideoMeta | null> {
+  const videoId = getVideoId();
+  if (!videoId) return null;
+  const main = await readMainWorldPayload();
+  // Only trust the player response if it's for THIS video — it can lag behind
+  // SPA navigation. Otherwise fall back to the (always-current) document title.
+  const det = main?.playerResponse?.videoDetails;
+  const fresh = det && det.videoId === videoId ? det : undefined;
+  return {
+    videoId,
+    url: `https://www.youtube.com/watch?v=${videoId}`,
+    title: fresh?.title ?? document.title.replace(/ - YouTube$/, ""),
+    channel: fresh?.author ?? "",
+    durationSeconds: fresh?.lengthSeconds
+      ? parseInt(fresh.lengthSeconds, 10)
+      : null,
+  };
+}
+
+async function pushVideoMeta(): Promise<void> {
+  if (!isWatchPage()) return;
+  try {
+    const videoMeta = await readVideoMetaCheap();
+    if (videoMeta) {
+      await chrome.runtime.sendMessage({ type: "SET_VIDEO_META", videoMeta });
+    }
+  } catch (err) {
+    console.warn("cnstlltn: pushVideoMeta failed", err);
+  }
+}
+
 function ensureButton() {
   if (!isWatchPage()) {
     document.getElementById(BUTTON_ID)?.remove();
@@ -569,17 +602,26 @@ function ensureButton() {
     fontFamily: "system-ui, -apple-system, sans-serif",
   } as Partial<CSSStyleDeclaration>);
 
-  btn.addEventListener("click", async () => {
-    // Open the side panel FIRST, synchronously, while we still hold the user
-    // gesture. chrome.sidePanel.open() rejects if called after any `await`,
-    // so we fire-and-forget this before doing transcript extraction.
+  btn.addEventListener("click", () => {
+    // Open the side panel synchronously while we still hold the user gesture —
+    // chrome.sidePanel.open() rejects if called after any `await`. We no longer
+    // scrape the transcript here; that's deferred until the user clicks
+    // "Generate notes from this video". We just push cheap metadata so the
+    // panel shows the current video right away.
     chrome.runtime
       .sendMessage({ type: "OPEN_SIDE_PANEL" })
       .catch((err) => console.warn("cnstlltn: open-panel send failed", err));
+    void pushVideoMeta();
+  });
 
-    const original = btn.textContent;
-    btn.textContent = "📝 extracting…";
-    btn.setAttribute("disabled", "true");
+  document.body.appendChild(btn);
+}
+
+// Generate-time transcript extraction: the side panel asks us to scrape the
+// transcript for the current video, then we store it as the session.
+chrome.runtime.onMessage.addListener((rawMsg, _sender, sendResponse) => {
+  if ((rawMsg as { type?: string })?.type !== "EXTRACT_TRANSCRIPT") return false;
+  (async () => {
     try {
       const { cues, videoMeta } = await extractTranscript();
       const transcriptVtt = cuesToVtt(cues);
@@ -588,37 +630,32 @@ function ensureButton() {
         type: "TRANSCRIPT_READY",
         payload,
       });
-      if (!resp?.ok) {
-        throw new Error(resp?.error ?? "Background did not respond.");
-      }
-      btn.textContent = "📝 opened in side panel";
-      setTimeout(() => {
-        btn.textContent = original;
-        btn.removeAttribute("disabled");
-      }, 2000);
+      if (!resp?.ok) throw new Error(resp?.error ?? "Background did not respond.");
+      sendResponse({ ok: true, result: { cues: cues.length } });
     } catch (err) {
       console.error("cnstlltn: extract failed", err);
-      btn.textContent = "📝 failed — see console";
-      setTimeout(() => {
-        btn.textContent = original;
-        btn.removeAttribute("disabled");
-      }, 3000);
+      sendResponse({ ok: false, error: (err as Error).message });
     }
-  });
-
-  document.body.appendChild(btn);
-}
+  })();
+  return true; // async sendResponse
+});
 
 function init() {
+  const onNav = () => {
+    setTimeout(() => {
+      ensureButton();
+      // Keep the side panel's displayed video in sync with the current one.
+      void pushVideoMeta();
+    }, 300);
+  };
   ensureButton();
-  document.addEventListener("yt-navigate-finish", () => {
-    setTimeout(ensureButton, 300);
-  });
+  void pushVideoMeta();
+  document.addEventListener("yt-navigate-finish", onNav);
   let lastUrl = location.href;
   const observer = new MutationObserver(() => {
     if (location.href !== lastUrl) {
       lastUrl = location.href;
-      setTimeout(ensureButton, 300);
+      onNav();
     }
   });
   observer.observe(document, { subtree: true, childList: true });

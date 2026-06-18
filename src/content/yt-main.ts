@@ -24,15 +24,22 @@ window.addEventListener("message", (ev) => {
       innertubeApiKey = typeof k === "string" ? k : null;
     }
   } catch {}
+  // Prefer the live player response (the player API updates it on SPA
+  // navigation); fall back to ytInitialPlayerResponse (only set on full loads).
+  let playerResponse: unknown = window.ytInitialPlayerResponse ?? null;
+  try {
+    const mp = document.getElementById("movie_player") as
+      | (HTMLElement & { getPlayerResponse?: () => unknown })
+      | null;
+    const live = mp?.getPlayerResponse?.();
+    if (live) playerResponse = live;
+  } catch {}
+
   window.postMessage(
     {
       type: "NOTETAKER_PLAYER_RESPONSE",
       token: data.token,
-      payload: {
-        playerResponse: window.ytInitialPlayerResponse ?? null,
-        innertubeContext,
-        innertubeApiKey,
-      },
+      payload: { playerResponse, innertubeContext, innertubeApiKey },
     },
     "*",
   );

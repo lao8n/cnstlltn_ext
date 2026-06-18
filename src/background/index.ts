@@ -10,7 +10,7 @@ import {
   sha256Hex,
 } from "@/lib/note";
 import { DEFAULT_MODEL } from "@/lib/types";
-import type { Msg, SessionPayload, LLMNote } from "@/lib/types";
+import type { Msg, SessionPayload, LLMNote, VideoMeta } from "@/lib/types";
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.sidePanel
@@ -74,7 +74,29 @@ async function handle(msg: Msg, sender: chrome.runtime.MessageSender) {
       return github.updateTopicDescription(msg.topic, msg.description);
     case "FETCH_TOPIC_NOTES_CONTENT":
       return { notes: await github.fetchTopicNotesContent(msg.topic) };
+    case "SET_VIDEO_META":
+      return onSetVideoMeta(msg.videoMeta);
+    case "EXTRACT_TRANSCRIPT":
+      // Handled by the content script (it owns the DOM); never reaches here.
+      return { ok: false };
   }
+}
+
+async function onSetVideoMeta(meta: VideoMeta) {
+  const existing = await getSession<SessionPayload>();
+  if (existing && existing.videoMeta.videoId === meta.videoId) {
+    // Same video — just refresh metadata, keep any transcript we already have.
+    await setSession<SessionPayload>({ ...existing, videoMeta: meta });
+  } else {
+    // New (or first) video — fresh metadata; transcript is scraped lazily at
+    // generate time, so start with no cues.
+    await setSession<SessionPayload>({
+      videoMeta: meta,
+      cues: [],
+      transcriptVtt: "",
+    });
+  }
+  return { ok: true };
 }
 
 async function onTranscriptReady(

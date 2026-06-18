@@ -25,6 +25,22 @@ async function send<T>(msg: object): Promise<T> {
   return resp.result;
 }
 
+// Ask the active YouTube tab's content script to scrape the transcript for the
+// video currently on screen, and wait until it's stored as the session. Used
+// at generate time, since the FAB no longer scrapes eagerly.
+async function extractTranscriptForActiveTab(): Promise<void> {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (tab?.id == null) {
+    throw new Error("No active tab to read the transcript from.");
+  }
+  const resp = (await chrome.tabs.sendMessage(tab.id, {
+    type: "EXTRACT_TRANSCRIPT",
+  })) as { ok: boolean; error?: string } | undefined;
+  if (!resp?.ok) {
+    throw new Error(resp?.error ?? "Could not read the transcript for this video.");
+  }
+}
+
 function App() {
   const s = useStore();
   // Closure that re-runs the last action that hit an error. Set on every
@@ -100,8 +116,16 @@ function App() {
     s.setError(null);
     s.setPhase("generating");
     try {
-      const session = await send<SessionPayload | null>({ type: "GET_SESSION" });
-      if (!session) throw new Error("No active transcript session.");
+      let session = await send<SessionPayload | null>({ type: "GET_SESSION" });
+      // Transcript is scraped lazily — the first time we generate for a video.
+      // If we don't have cues yet, ask the active tab to extract them now.
+      if (!session || session.cues.length === 0) {
+        await extractTranscriptForActiveTab();
+        session = await send<SessionPayload | null>({ type: "GET_SESSION" });
+      }
+      if (!session || session.cues.length === 0) {
+        throw new Error("Couldn't read a transcript for this video.");
+      }
       s.setSession(session);
       // Pull existing notes' bodies for the topic — used as gold-note context.
       // Skip for new topics (nothing exists yet) or if no description set
@@ -436,13 +460,14 @@ function AnimatedDots() {
 
 function VideoCard({ session }: { session: SessionPayload | null }) {
   if (!session) return null;
-  const cueCount = session.cues.length;
   return (
     <div className="rounded border border-slate-300 dark:border-slate-700 px-3 py-2">
       <div className="font-medium truncate">{session.videoMeta.title}</div>
-      <div className="text-xs opacity-70 truncate">
-        {session.videoMeta.channel} · {cueCount} transcript cues
-      </div>
+      {session.videoMeta.channel && (
+        <div className="text-xs opacity-70 truncate">
+          {session.videoMeta.channel}
+        </div>
+      )}
     </div>
   );
 }

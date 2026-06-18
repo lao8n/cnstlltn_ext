@@ -175,7 +175,13 @@ export type Msg =
   | { type: "CREATE_REPO" }
   | { type: "FETCH_TOPIC_DESCRIPTION"; topic: string }
   | { type: "SAVE_TOPIC_DESCRIPTION"; topic: string; description: string }
-  | { type: "FETCH_TOPIC_NOTES_CONTENT"; topic: string };
+  | { type: "FETCH_TOPIC_NOTES_CONTENT"; topic: string }
+  // Cheap metadata-only update pushed by the content script as the user
+  // navigates between videos, so the side panel always shows the current one.
+  | { type: "SET_VIDEO_META"; videoMeta: VideoMeta }
+  // Side panel asks the active tab's content script to scrape the transcript
+  // (deferred until generate time, so the FAB no longer opens it eagerly).
+  | { type: "EXTRACT_TRANSCRIPT" };
 
 export interface CommittedNoteRef {
   id: string;
