@@ -54,6 +54,24 @@ export const LLMNotes = z.object({
 });
 export type LLMNotes = z.infer<typeof LLMNotes>;
 
+// --- Analyse tab ---------------------------------------------------------
+// The Analyse tab reflects on the corpus of notes already committed to a
+// topic (not a live transcript). Each "lens" is a standardised flow the LLM
+// runs over those notes, returning a set of read-only cards.
+export const AnalysisLens = z.enum(["notes", "gaps"]);
+export type AnalysisLens = z.infer<typeof AnalysisLens>;
+
+export const AnalysisCard = z.object({
+  title: z.string().describe("Short heading naming the argument, position, or gap."),
+  body: z.string().describe("Analysis prose, ~80-120 words."),
+});
+export type AnalysisCard = z.infer<typeof AnalysisCard>;
+
+export const AnalysisResult = z.object({
+  cards: z.array(AnalysisCard),
+});
+export type AnalysisResult = z.infer<typeof AnalysisResult>;
+
 export interface VideoMeta {
   videoId: string;
   url: string;
@@ -176,6 +194,15 @@ export type Msg =
   | { type: "FETCH_TOPIC_DESCRIPTION"; topic: string }
   | { type: "SAVE_TOPIC_DESCRIPTION"; topic: string; description: string }
   | { type: "FETCH_TOPIC_NOTES_CONTENT"; topic: string }
+  // Analyse tab: run a standardised analysis lens over a topic's committed
+  // notes. Read-only — results are ephemeral and never written back.
+  // userPrompt is an optional free-text steer the user pairs with either lens.
+  | {
+      type: "ANALYSE_TOPIC";
+      topic: string;
+      lens: AnalysisLens;
+      userPrompt?: string | null;
+    }
   // Cheap metadata-only update pushed by the content script as the user
   // navigates between videos, so the side panel always shows the current one.
   | { type: "SET_VIDEO_META"; videoMeta: VideoMeta }

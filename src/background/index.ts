@@ -1,5 +1,5 @@
 import { github, type FileToCommit } from "./github";
-import { generateRootNotes, generateDrillNotes } from "./llm";
+import { generateRootNotes, generateDrillNotes, generateAnalysis } from "./llm";
 import { getSession, setSession } from "@/lib/storage";
 import {
   KB_PATHS,
@@ -74,6 +74,8 @@ async function handle(msg: Msg, sender: chrome.runtime.MessageSender) {
       return github.updateTopicDescription(msg.topic, msg.description);
     case "FETCH_TOPIC_NOTES_CONTENT":
       return { notes: await github.fetchTopicNotesContent(msg.topic) };
+    case "ANALYSE_TOPIC":
+      return runAnalyse(msg);
     case "SET_VIDEO_META":
       return onSetVideoMeta(msg.videoMeta);
     case "EXTRACT_TRANSCRIPT":
@@ -148,6 +150,24 @@ async function runGenerateDrill(msg: Extract<Msg, { type: "GENERATE_DRILL" }>) {
     existingNotes: msg.existingNotes ?? null,
   });
   return { topic: msg.topic, notes };
+}
+
+async function runAnalyse(msg: Extract<Msg, { type: "ANALYSE_TOPIC" }>) {
+  const notes = await github.fetchTopicNotesContent(msg.topic);
+  if (notes.length === 0) {
+    throw new Error(
+      "This topic has no notes yet. Extract some from a video first.",
+    );
+  }
+  const topicMd = await github.fetchTopicMd(msg.topic);
+  const cards = await generateAnalysis({
+    lens: msg.lens,
+    topicTitle: topicMd?.frontmatter.title ?? msg.topic,
+    topicGoal: topicMd?.frontmatter.description ?? null,
+    notes: notes.map(({ title, content }) => ({ title, content })),
+    userPrompt: msg.userPrompt ?? null,
+  });
+  return { cards };
 }
 
 async function runCommit(msg: Extract<Msg, { type: "COMMIT_NOTES" }>) {

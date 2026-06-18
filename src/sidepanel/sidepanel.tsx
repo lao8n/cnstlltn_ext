@@ -5,6 +5,8 @@ import * as Slider from "@radix-ui/react-slider";
 import "@/index.css";
 import { getSettings } from "@/lib/storage";
 import type {
+  AnalysisCard,
+  AnalysisLens,
   CommitResult,
   LLMNote,
   SessionPayload,
@@ -15,6 +17,7 @@ import {
   isSettingsComplete,
   currentFrame,
   type DrillFrame,
+  type Tab,
 } from "./state";
 
 async function send<T>(msg: object): Promise<T> {
@@ -66,6 +69,15 @@ function App() {
     if (!isSettingsComplete(settings)) {
       s.setPhase("no-settings");
       return;
+    }
+    // Load topics up front so the Analyse tab works even without an active
+    // video (the arriving-block below only refreshes them on a new session).
+    if (useStore.getState().topics.length === 0) {
+      try {
+        s.setTopics(await send<string[]>({ type: "LIST_TOPICS" }));
+      } catch (err) {
+        console.warn("Could not list topics, treating as empty:", err);
+      }
     }
     const prevVideoId = useStore.getState().session?.videoMeta.videoId;
     const session = await send<SessionPayload | null>({ type: "GET_SESSION" });
@@ -283,6 +295,31 @@ function App() {
     }
   }
 
+  async function onAnalyse(lens: AnalysisLens) {
+    const topic = s.analyseTopic;
+    if (!topic) {
+      s.setAnalyseError("Pick a topic to analyse first.");
+      return;
+    }
+    s.setAnalyseError(null);
+    s.setAnalyseLens(lens);
+    s.setAnalyseCards([]);
+    s.setAnalyseLoading(true);
+    try {
+      const { cards } = await send<{ cards: AnalysisCard[] }>({
+        type: "ANALYSE_TOPIC",
+        topic,
+        lens,
+        userPrompt: s.analysePrompt.trim() || null,
+      });
+      s.setAnalyseCards(cards);
+    } catch (err) {
+      s.setAnalyseError(friendlyError((err as Error).message));
+    } finally {
+      s.setAnalyseLoading(false);
+    }
+  }
+
   return (
     <div className="p-4 max-w-xl mx-auto text-sm space-y-4">
       <div className="flex justify-between items-center -mb-2">
@@ -296,11 +333,6 @@ function App() {
           settings
         </button>
       </div>
-      {s.errorMessage && (
-        <div className="rounded bg-rose-100 text-rose-900 dark:bg-rose-950 dark:text-rose-100 px-3 py-2">
-          {s.errorMessage}
-        </div>
-      )}
 
       {s.phase === "loading" && <div>Loading…</div>}
 
@@ -316,128 +348,157 @@ function App() {
         </div>
       )}
 
-      {s.phase === "no-session" && (
-        <div className="space-y-2">
-          <p>
-            No active video. Go to a YouTube watch page and click the 📝
-            cnstlltn button.
-          </p>
-        </div>
+      {s.phase !== "loading" && s.phase !== "no-settings" && (
+        <TabBar tab={s.tab} onTab={s.setTab} />
       )}
 
-      {s.phase !== "loading" &&
-        s.phase !== "no-settings" &&
-        s.phase !== "no-session" && (
-          <VideoCard session={s.session} />
+      {s.tab === "analyse" &&
+        s.phase !== "loading" &&
+        s.phase !== "no-settings" && (
+          <AnalyseView
+            topics={s.topics}
+            selectedTopic={s.analyseTopic}
+            prompt={s.analysePrompt}
+            lens={s.analyseLens}
+            cards={s.analyseCards}
+            loading={s.analyseLoading}
+            error={s.analyseError}
+            onPick={(t) => s.pickAnalyseTopic(t)}
+            onChangePrompt={(p) => s.setAnalysePrompt(p)}
+            onAnalyse={onAnalyse}
+          />
         )}
 
-      {s.phase === "topic-picker" && (
-        <TopicPicker
-          topics={s.topics}
-          selectedTopic={s.selectedTopic}
-          newTopicTitle={s.newTopicTitle}
-          isNewTopic={s.isNewTopic}
-          currentTopicDescription={s.currentTopicDescription}
-          savedTopicDescription={s.savedTopicDescription}
-          durationSeconds={s.session?.videoMeta.durationSeconds ?? null}
-          rangeStartSeconds={s.rangeStartSeconds}
-          rangeEndSeconds={s.rangeEndSeconds}
-          onChangeRange={(start, end) => s.setRange(start, end)}
-          onPick={async (t) => {
-            s.pickTopic(t);
-            // Load existing description for the picked topic.
-            try {
-              const { description } = await send<{ description: string }>({
-                type: "FETCH_TOPIC_DESCRIPTION",
-                topic: t,
-              });
-              s.setCurrentTopicDescription(description);
-              s.setSavedTopicDescription(description);
-            } catch (err) {
-              console.warn("FETCH_TOPIC_DESCRIPTION failed", err);
-            }
-          }}
-          onSetIsNew={(b) => s.setIsNewTopic(b)}
-          onChangeNewTitle={(t) => s.setNewTopicTitle(t)}
-          onChangeDescription={(d) => s.setCurrentTopicDescription(d)}
-          onSaveDescription={async () => {
-            const slug = effectiveTopic(s);
-            if (!slug) return;
-            try {
-              const result = await send<{ ok: boolean; message: string }>({
-                type: "SAVE_TOPIC_DESCRIPTION",
-                topic: slug,
-                description: s.currentTopicDescription,
-              });
-              if (result.ok) {
-                s.setSavedTopicDescription(s.currentTopicDescription);
-              } else {
-                // topic.md doesn't exist yet — defer to first commit. We still
-                // treat the typed description as "current"; commit will persist it.
-                s.setSavedTopicDescription(s.currentTopicDescription);
-              }
-            } catch (err) {
-              s.setError(friendlyError((err as Error).message));
-            }
-          }}
-          onGenerate={onGenerate}
-        />
-      )}
+      {s.tab === "extract" &&
+        s.phase !== "loading" &&
+        s.phase !== "no-settings" && (
+          <>
+            {s.errorMessage && (
+              <div className="rounded bg-rose-100 text-rose-900 dark:bg-rose-950 dark:text-rose-100 px-3 py-2">
+                {s.errorMessage}
+              </div>
+            )}
 
-      {s.phase === "generating" && (
-        <div className="opacity-70">
-          Generating notes from transcript<AnimatedDots />
-        </div>
-      )}
+            {s.phase === "no-session" && (
+              <div className="space-y-2">
+                <p>
+                  No active video. Go to a YouTube watch page and click the 📝
+                  cnstlltn button.
+                </p>
+              </div>
+            )}
 
-      {s.commitBanner && s.phase === "candidates" && (
-        <CommitBannerView
-          banner={s.commitBanner}
-          onDismiss={() => s.setCommitBanner(null)}
-        />
-      )}
+            {s.phase !== "no-session" && <VideoCard session={s.session} />}
 
-      {s.phase === "candidates" && currentFrame(s) && (
-        <CandidateList
-          stack={s.drillStack}
-          onToggle={(i) => s.toggleSelected(i)}
-          onDrillCandidate={onDrillCandidate}
-          onBack={onBack}
-          onCommit={onCommit}
-          onCancel={() => {
-            s.clearStack();
-            s.setPhase("topic-picker");
-          }}
-        />
-      )}
+            {s.phase === "topic-picker" && (
+              <TopicPicker
+                topics={s.topics}
+                selectedTopic={s.selectedTopic}
+                newTopicTitle={s.newTopicTitle}
+                isNewTopic={s.isNewTopic}
+                currentTopicDescription={s.currentTopicDescription}
+                savedTopicDescription={s.savedTopicDescription}
+                durationSeconds={s.session?.videoMeta.durationSeconds ?? null}
+                rangeStartSeconds={s.rangeStartSeconds}
+                rangeEndSeconds={s.rangeEndSeconds}
+                onChangeRange={(start, end) => s.setRange(start, end)}
+                onPick={async (t) => {
+                  s.pickTopic(t);
+                  // Load existing description for the picked topic.
+                  try {
+                    const { description } = await send<{ description: string }>({
+                      type: "FETCH_TOPIC_DESCRIPTION",
+                      topic: t,
+                    });
+                    s.setCurrentTopicDescription(description);
+                    s.setSavedTopicDescription(description);
+                  } catch (err) {
+                    console.warn("FETCH_TOPIC_DESCRIPTION failed", err);
+                  }
+                }}
+                onSetIsNew={(b) => s.setIsNewTopic(b)}
+                onChangeNewTitle={(t) => s.setNewTopicTitle(t)}
+                onChangeDescription={(d) => s.setCurrentTopicDescription(d)}
+                onSaveDescription={async () => {
+                  const slug = effectiveTopic(s);
+                  if (!slug) return;
+                  try {
+                    const result = await send<{ ok: boolean; message: string }>({
+                      type: "SAVE_TOPIC_DESCRIPTION",
+                      topic: slug,
+                      description: s.currentTopicDescription,
+                    });
+                    if (result.ok) {
+                      s.setSavedTopicDescription(s.currentTopicDescription);
+                    } else {
+                      // topic.md doesn't exist yet — defer to first commit. We still
+                      // treat the typed description as "current"; commit will persist it.
+                      s.setSavedTopicDescription(s.currentTopicDescription);
+                    }
+                  } catch (err) {
+                    s.setError(friendlyError((err as Error).message));
+                  }
+                }}
+                onGenerate={onGenerate}
+              />
+            )}
 
-      {s.phase === "committing" && <div>Committing to GitHub…</div>}
+            {s.phase === "generating" && (
+              <div className="opacity-70">
+                Generating notes from transcript<AnimatedDots />
+              </div>
+            )}
 
-      {s.phase === "error" && (
-        <div className="flex gap-2">
-          {retryRef.current && (
-            <button
-              className="nt-btn nt-btn-primary"
-              onClick={() => {
-                const fn = retryRef.current;
-                if (fn) void fn();
-              }}
-            >
-              Retry
-            </button>
-          )}
-          <button
-            className="nt-btn"
-            onClick={() => {
-              s.setError(null);
-              retryRef.current = null;
-              s.setPhase("topic-picker");
-            }}
-          >
-            Back
-          </button>
-        </div>
-      )}
+            {s.commitBanner && s.phase === "candidates" && (
+              <CommitBannerView
+                banner={s.commitBanner}
+                onDismiss={() => s.setCommitBanner(null)}
+              />
+            )}
+
+            {s.phase === "candidates" && currentFrame(s) && (
+              <CandidateList
+                stack={s.drillStack}
+                onToggle={(i) => s.toggleSelected(i)}
+                onDrillCandidate={onDrillCandidate}
+                onBack={onBack}
+                onCommit={onCommit}
+                onCancel={() => {
+                  s.clearStack();
+                  s.setPhase("topic-picker");
+                }}
+              />
+            )}
+
+            {s.phase === "committing" && <div>Committing to GitHub…</div>}
+
+            {s.phase === "error" && (
+              <div className="flex gap-2">
+                {retryRef.current && (
+                  <button
+                    className="nt-btn nt-btn-primary"
+                    onClick={() => {
+                      const fn = retryRef.current;
+                      if (fn) void fn();
+                    }}
+                  >
+                    Retry
+                  </button>
+                )}
+                <button
+                  className="nt-btn"
+                  onClick={() => {
+                    s.setError(null);
+                    retryRef.current = null;
+                    s.setPhase("topic-picker");
+                  }}
+                >
+                  Back
+                </button>
+              </div>
+            )}
+          </>
+        )}
 
       <Styles />
     </div>
@@ -455,6 +516,157 @@ function AnimatedDots() {
     <span className="inline-block w-[1.5ch] text-left">
       {".".repeat(count)}
     </span>
+  );
+}
+
+function TabBar({ tab, onTab }: { tab: Tab; onTab: (t: Tab) => void }) {
+  const tabs: { id: Tab; label: string }[] = [
+    { id: "extract", label: "Extract" },
+    { id: "analyse", label: "Analyse" },
+  ];
+  return (
+    <div className="flex border-b border-slate-300 dark:border-slate-700 -mx-1">
+      {tabs.map((t) => (
+        <button
+          key={t.id}
+          onClick={() => onTab(t.id)}
+          className={
+            "px-3 py-1.5 text-sm font-medium border-b-2 -mb-px transition-colors " +
+            (tab === t.id
+              ? "border-slate-900 dark:border-slate-100 opacity-100"
+              : "border-transparent opacity-60 hover:opacity-100")
+          }
+        >
+          {t.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+const ANALYSE_LENSES: { id: AnalysisLens; label: string; hint: string }[] = [
+  {
+    id: "notes",
+    label: "Notes",
+    hint: "Analyse the perspectives & themes already in your notes.",
+  },
+  {
+    id: "gaps",
+    label: "Gaps",
+    hint: "Missing perspectives, each steel-manned at its strongest.",
+  },
+];
+
+function AnalyseView(props: {
+  topics: string[];
+  selectedTopic: string;
+  prompt: string;
+  lens: AnalysisLens | null;
+  cards: AnalysisCard[];
+  loading: boolean;
+  error: string | null;
+  onPick: (slug: string) => void;
+  onChangePrompt: (p: string) => void;
+  onAnalyse: (lens: AnalysisLens) => void;
+}) {
+  const activeHint = ANALYSE_LENSES.find((l) => l.id === props.lens)?.hint;
+  return (
+    <div className="space-y-3">
+      {props.topics.length === 0 ? (
+        <p className="opacity-70">
+          No topics yet. Extract some notes from a video first, then come back
+          to analyse them.
+        </p>
+      ) : (
+        <div className="space-y-1">
+          <label className="block text-xs font-medium opacity-80">
+            Topic to analyse
+          </label>
+          <select
+            className="nt-input"
+            value={props.selectedTopic}
+            onChange={(e) => props.onPick(e.target.value)}
+          >
+            <option value="">— pick a topic —</option>
+            {props.topics.map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      {props.selectedTopic && (
+        <div className="space-y-2">
+          <div className="space-y-1">
+            <label className="block text-xs font-medium opacity-80">
+              Optional steer (paired with either button below)
+            </label>
+            <textarea
+              className="nt-input"
+              rows={2}
+              placeholder="e.g. focus on the economic arguments, or compare the realist and liberal views"
+              value={props.prompt}
+              onChange={(e) => props.onChangePrompt(e.target.value)}
+            />
+          </div>
+          <div className="flex gap-2">
+            {ANALYSE_LENSES.map((l) => (
+              <button
+                key={l.id}
+                className={
+                  "nt-btn flex-1 " +
+                  (props.lens === l.id ? "nt-btn-primary" : "")
+                }
+                disabled={props.loading}
+                onClick={() => props.onAnalyse(l.id)}
+              >
+                {l.label}
+              </button>
+            ))}
+          </div>
+          {activeHint && (
+            <div className="text-xs opacity-60">{activeHint}</div>
+          )}
+        </div>
+      )}
+
+      {props.error && (
+        <div className="rounded bg-rose-100 text-rose-900 dark:bg-rose-950 dark:text-rose-100 px-3 py-2">
+          {props.error}
+        </div>
+      )}
+
+      {props.loading && (
+        <div className="opacity-70">
+          Analysing notes<AnimatedDots />
+        </div>
+      )}
+
+      {!props.loading && props.cards.length > 0 && (
+        <ul className="space-y-2">
+          {props.cards.map((c, i) => (
+            <li
+              key={i}
+              className="rounded border border-slate-300 dark:border-slate-700 px-3 py-2 space-y-1"
+            >
+              <div className="font-medium">{c.title}</div>
+              <div className="text-xs opacity-80 whitespace-pre-wrap">
+                {c.body}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {!props.loading &&
+        props.lens &&
+        props.cards.length === 0 &&
+        !props.error && (
+          <div className="opacity-70">No results returned. Try again.</div>
+        )}
+    </div>
   );
 }
 

@@ -1,6 +1,13 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { getSettings } from "@/lib/storage";
-import { LLMNotes, type LLMNote, type TranscriptCue } from "@/lib/types";
+import {
+  AnalysisResult,
+  LLMNotes,
+  type AnalysisCard,
+  type AnalysisLens,
+  type LLMNote,
+  type TranscriptCue,
+} from "@/lib/types";
 import { cuesToPromptText, refineNoteTimestamps } from "@/lib/vtt";
 
 const ROOT_SYSTEM_PROMPT = `You are an assistant that converts the transcript of a video into atomic, reusable knowledge-base notes for a personal mind map.
@@ -261,4 +268,93 @@ TIMESTAMPS: copy (Ns) integers from the transcript lines — stay inside [${args
     minSeconds: args.parentStartSeconds,
     maxSeconds: args.parentEndSeconds,
   });
+}
+
+// --- Analyse tab ---------------------------------------------------------
+
+const ANALYSIS_SYSTEM_PROMPTS: Record<AnalysisLens, string> = {
+  notes: `You are analysing the notes a user has collected on a topic so they can see what they have at a glance. You are given the notes they have gathered.
+
+Rules:
+- Identify the main perspectives, positions, and themes represented across the notes, and synthesise what the notes collectively say.
+- One card per perspective or theme. Aim for 3–6 cards.
+- Title: the perspective or theme in a few words.
+- Body: roughly 80–120 words. State the perspective at its strongest as it appears in the notes, name who holds it if attributable, and note how well-developed it currently is (richly covered vs only briefly touched on).
+- Stay grounded in what the notes actually say. Do not invent positions that aren't present.`,
+  gaps: `You are helping a user reach a COMPREHENSIVE understanding of all perspectives on a topic. You are given the notes they have collected so far.
+
+Rules:
+- First, infer where the current notes lean — which perspectives dominate and which are thin or absent.
+- Then surface the perspectives, arguments, counter-arguments, and key voices the user is MISSING or under-representing — and STEEL-MAN each one: give the strongest, most charitable version of that view, the case its ablest proponent would make, so the user genuinely understands it rather than just knowing it exists.
+- One card per missing or under-weighted perspective. Aim for 3–6 cards.
+- Title: the perspective or argument in a few words.
+- Body: roughly 80–120 words. The steel-manned case, plus a closing line on why it matters for a rounded view of the topic.
+- Do not fabricate specific facts or fake citations. Articulate the strongest form of a genuine position; describe the missing territory rather than inventing details.`,
+};
+
+const ANALYSIS_SCHEMA = {
+  type: Type.OBJECT,
+  properties: {
+    cards: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          title: {
+            type: Type.STRING,
+            description: "Short heading naming the argument, position, or gap.",
+          },
+          body: {
+            type: Type.STRING,
+            description: "Analysis prose, ~80-120 words. Plain markdown.",
+          },
+        },
+        required: ["title", "body"],
+        propertyOrdering: ["title", "body"],
+      },
+    },
+  },
+  required: ["cards"],
+};
+
+export async function generateAnalysis(args: {
+  lens: AnalysisLens;
+  topicTitle: string;
+  topicGoal: string | null;
+  notes: { title: string; content: string }[];
+  userPrompt?: string | null;
+}): Promise<AnalysisCard[]> {
+  const { model } = await getSettings();
+  const ai = await getClient();
+  const notesBlock = args.notes
+    .map(
+      (n, i) =>
+        `${i + 1}. ${n.title}\n${n.content.replace(/\s+/g, " ").trim()}`,
+    )
+    .join("\n\n");
+  const goalLine = args.topicGoal?.trim()
+    ? `Topic goal: ${args.topicGoal.trim()}\n`
+    : "";
+  const steer = args.userPrompt?.trim()
+    ? `\n\nADDITIONAL INSTRUCTION FROM THE USER — steer your analysis to this, while still following the rules in the system message:\n${args.userPrompt.trim()}`
+    : "";
+  const userPrompt = `Topic: ${args.topicTitle}
+${goalLine}
+NOTES IN THIS TOPIC (title + body):
+${notesBlock}
+
+Analyse these notes following the rules in the system message. Return only cards grounded in the material above.${steer}`;
+
+  const response = await ai.models.generateContent({
+    model,
+    contents: userPrompt,
+    config: {
+      systemInstruction: ANALYSIS_SYSTEM_PROMPTS[args.lens],
+      responseMimeType: "application/json",
+      responseSchema: ANALYSIS_SCHEMA,
+    },
+  });
+  const raw = response.text;
+  if (!raw) throw new Error("Gemini returned no content.");
+  return AnalysisResult.parse(JSON.parse(raw)).cards;
 }

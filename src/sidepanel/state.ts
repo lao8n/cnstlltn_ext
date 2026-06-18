@@ -1,5 +1,15 @@
 import { create } from "zustand";
-import type { LLMNote, SessionPayload, Settings } from "@/lib/types";
+import type {
+  AnalysisCard,
+  AnalysisLens,
+  LLMNote,
+  SessionPayload,
+  Settings,
+} from "@/lib/types";
+
+// Top-level tabs in the side panel. "extract" is the original transcript →
+// notes flow; "analyse" reflects on a topic's existing notes.
+export type Tab = "extract" | "analyse";
 
 export type Phase =
   | "loading"
@@ -30,6 +40,7 @@ export interface CommitBanner {
 }
 
 interface State {
+  tab: Tab;
   phase: Phase;
   errorMessage: string | null;
   settings: Settings | null;
@@ -53,9 +64,19 @@ interface State {
   // the full video. Reset when the active video changes.
   rangeStartSeconds: number | null;
   rangeEndSeconds: number | null;
+
+  // --- Analyse tab (independent of the extract phase machine) ---
+  analyseTopic: string;
+  // Optional free-text steer paired with whichever lens button is clicked.
+  analysePrompt: string;
+  analyseLens: AnalysisLens | null;
+  analyseCards: AnalysisCard[];
+  analyseLoading: boolean;
+  analyseError: string | null;
 }
 
 interface Actions {
+  setTab: (t: Tab) => void;
   setPhase: (p: Phase) => void;
   setError: (m: string | null) => void;
   setSettings: (s: Settings | null) => void;
@@ -80,6 +101,13 @@ interface Actions {
     n: { id: string; title: string; path: string }[],
   ) => void;
   resetForNewBatch: () => void;
+  // Analyse tab
+  pickAnalyseTopic: (t: string) => void;
+  setAnalysePrompt: (p: string) => void;
+  setAnalyseLens: (l: AnalysisLens | null) => void;
+  setAnalyseCards: (c: AnalysisCard[]) => void;
+  setAnalyseLoading: (b: boolean) => void;
+  setAnalyseError: (m: string | null) => void;
 }
 
 /** Keep parent's childrenByCandidateIdx in sync with the live stack top. */
@@ -99,6 +127,7 @@ function syncTopFrameToParentCache(stack: DrillFrame[]): DrillFrame[] {
 }
 
 export const useStore = create<State & Actions>((set) => ({
+  tab: "extract",
   phase: "loading",
   errorMessage: null,
   settings: null,
@@ -114,7 +143,14 @@ export const useStore = create<State & Actions>((set) => ({
   notesForTopic: [],
   rangeStartSeconds: null,
   rangeEndSeconds: null,
+  analyseTopic: "",
+  analysePrompt: "",
+  analyseLens: null,
+  analyseCards: [],
+  analyseLoading: false,
+  analyseError: null,
 
+  setTab: (tab) => set({ tab }),
   setPhase: (phase) => set({ phase }),
   setError: (errorMessage) => set({ errorMessage }),
   setSettings: (settings) => set({ settings }),
@@ -195,6 +231,21 @@ export const useStore = create<State & Actions>((set) => ({
       commitBanner: null,
       phase: "topic-picker",
     }),
+  // Switching the analysed topic clears any prior result.
+  pickAnalyseTopic: (analyseTopic) =>
+    set({
+      analyseTopic,
+      analyseLens: null,
+      analyseCards: [],
+      analyseError: null,
+    }),
+  // Free-text steer is the user's own input — left intact across topic
+  // switches rather than wiped, since a focus often applies across topics.
+  setAnalysePrompt: (analysePrompt) => set({ analysePrompt }),
+  setAnalyseLens: (analyseLens) => set({ analyseLens }),
+  setAnalyseCards: (analyseCards) => set({ analyseCards }),
+  setAnalyseLoading: (analyseLoading) => set({ analyseLoading }),
+  setAnalyseError: (analyseError) => set({ analyseError }),
 }));
 
 export function isSettingsComplete(s: Settings | null): boolean {
