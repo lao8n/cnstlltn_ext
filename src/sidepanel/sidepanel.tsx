@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { ulid } from "ulid";
 import * as Slider from "@radix-ui/react-slider";
 import "@/index.css";
+import logoUrl from "@/assets/logo.svg";
 import {
   getSettings,
   getRepoProfiles,
@@ -480,14 +481,18 @@ function App() {
               </div>
             )}
 
-            <div className="flex justify-end -mt-1">
-              <button
-                className="text-xs underline opacity-70 hover:opacity-100"
-                onClick={() => setArticleEntryOpen((v) => !v)}
-              >
-                {articleEntryOpen ? "close" : "＋ article / paste"}
-              </button>
-            </div>
+            {s.phase === "no-session" && <EmptyHero />}
+
+            {s.phase !== "no-session" && (
+              <div className="flex justify-end -mt-1">
+                <button
+                  className="nt-link-btn"
+                  onClick={() => setArticleEntryOpen((v) => !v)}
+                >
+                  {articleEntryOpen ? "Close" : "＋ Article / paste"}
+                </button>
+              </div>
+            )}
 
             {(articleEntryOpen || s.phase === "no-session") && (
               <ArticleEntry
@@ -498,9 +503,10 @@ function App() {
             )}
 
             {s.phase === "no-session" && (
-              <p className="text-xs opacity-70">
-                Or open a YouTube video and click the 📝 cnstlltn button to use
-                its transcript.
+              <p className="text-xs opacity-70 text-center">
+                Or open a YouTube video and use the{" "}
+                <span className="font-medium">cnstlltn</span> button on the
+                player to capture its transcript.
               </p>
             )}
 
@@ -617,6 +623,24 @@ function App() {
         )}
 
       <Styles />
+    </div>
+  );
+}
+
+function EmptyHero() {
+  return (
+    <div className="flex flex-col items-center text-center gap-2 pt-4 pb-1">
+      <img
+        src={logoUrl}
+        alt=""
+        className="w-12 h-12 rounded-xl shadow-sm"
+        draggable={false}
+      />
+      <h1 className="text-base font-semibold tracking-tight">cnstlltn</h1>
+      <p className="text-xs opacity-70 max-w-[16rem]">
+        Turn anything you read or watch into linked notes in your knowledge
+        base.
+      </p>
     </div>
   );
 }
@@ -784,7 +808,7 @@ function AnalyseView(props: {
           {props.cards.map((c, i) => (
             <li
               key={i}
-              className="rounded border border-slate-300 dark:border-slate-700 px-3 py-2 space-y-1"
+              className="rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-2 space-y-1"
             >
               <div className="font-medium">{c.title}</div>
               <div className="text-xs opacity-80 whitespace-pre-wrap">
@@ -849,10 +873,13 @@ function ArticleEntry(props: {
   const [title, setTitle] = useState("");
   const [url, setUrl] = useState("");
   return (
-    <div className="space-y-2 rounded border border-slate-300 dark:border-slate-700 p-3">
-      <div className="text-xs font-medium opacity-80">Add a source</div>
+    <div className="space-y-2.5 rounded-xl nt-surface p-4">
+      <div className="nt-caption">Add a source</div>
       <div className="flex flex-wrap gap-2">
-        <button className="nt-btn" onClick={props.onExtractArticle}>
+        <button
+          className="nt-btn nt-btn-primary"
+          onClick={props.onExtractArticle}
+        >
           Extract article
         </button>
         <button className="nt-btn" onClick={props.onExtractSelection}>
@@ -899,7 +926,7 @@ function ArticleEntry(props: {
 function VideoCard({ session }: { session: SessionPayload | null }) {
   if (!session) return null;
   return (
-    <div className="rounded border border-slate-300 dark:border-slate-700 px-3 py-2">
+    <div className="rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-2">
       <div className="font-medium truncate">{session.videoMeta.title}</div>
       {session.videoMeta.channel && (
         <div className="text-xs opacity-70 truncate">
@@ -1142,7 +1169,7 @@ function CandidateList(props: {
                 }
               }}
               className={
-                "relative rounded border px-3 py-2 pr-9 cursor-pointer transition-colors " +
+                "relative rounded-lg border px-3 py-2 pr-9 cursor-pointer transition-colors " +
                 (selected
                   ? // selected notes use the accent blue (matches the primary button) whether white or gold
                     "bg-[#4285F4] text-white border-[#4285F4]"
@@ -1426,14 +1453,51 @@ function Styles() {
       .nt-chip {
         display: inline-flex;
         align-items: center;
-        padding: 2px 10px;
+        gap: 6px;
+        padding: 2px 10px 2px 8px;
         border-radius: 9999px;
         font-size: 11px;
         font-weight: 500;
         letter-spacing: 0.01em;
         color: rgba(120,120,120,0.95);
-        background: rgba(120,120,120,0.12);
+        background: rgba(120,120,120,0.08);
       }
+      /* small live dot on the model chip */
+      .nt-chip::before {
+        content: "";
+        width: 6px;
+        height: 6px;
+        border-radius: 9999px;
+        background: #34A853;
+      }
+      /* tonal surface for grouping cards (Material-ish, no hard border) */
+      .nt-surface {
+        background: rgba(66,133,244,0.05);
+        border: 1px solid rgba(66,133,244,0.16);
+      }
+      @media (prefers-color-scheme: dark) {
+        .nt-surface { background: rgba(66,133,244,0.10); border-color: rgba(66,133,244,0.22); }
+      }
+      /* uppercase section caption */
+      .nt-caption {
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        opacity: 0.6;
+      }
+      /* quiet text/icon link button (replaces raw underlined links) */
+      .nt-link-btn {
+        font-size: 12px;
+        font-weight: 500;
+        color: #4285F4;
+        background: transparent;
+        border: none;
+        padding: 2px 4px;
+        border-radius: 6px;
+        cursor: pointer;
+      }
+      .nt-link-btn:hover { background: rgba(66,133,244,0.1); }
       /* circular settings button */
       .nt-icon-btn {
         display: inline-flex;

@@ -584,21 +584,40 @@ function ensureButton() {
 
   const btn = document.createElement("button");
   btn.id = BUTTON_ID;
-  btn.textContent = "📝 cnstlltn";
+  // Constellation glyph (white asterism) + wordmark — matches the extension icon.
+  btn.innerHTML = `
+    <svg width="16" height="16" viewBox="0 0 100 100" aria-hidden="true" style="display:block">
+      <g stroke="#ffffff" stroke-opacity="0.55" stroke-width="4" stroke-linecap="round">
+        <line x1="30" y1="34" x2="71" y2="27"/>
+        <line x1="71" y1="27" x2="74" y2="71"/>
+        <line x1="74" y1="71" x2="34" y2="73"/>
+        <line x1="34" y1="73" x2="30" y2="34"/>
+      </g>
+      <g fill="#ffffff">
+        <circle cx="30" cy="34" r="11"/>
+        <circle cx="71" cy="27" r="8.5"/>
+        <circle cx="74" cy="71" r="9.5"/>
+        <circle cx="34" cy="73" r="8.5"/>
+      </g>
+    </svg>
+    <span>cnstlltn</span>`;
   Object.assign(btn.style, {
     position: "fixed",
     right: "20px",
     bottom: "20px",
     zIndex: "2147483647",
-    padding: "10px 14px",
-    background: "#0f172a",
-    color: "#f8fafc",
-    border: "1px solid #334155",
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "8px",
+    padding: "10px 16px",
+    background: "#4285F4",
+    color: "#ffffff",
+    border: "none",
     borderRadius: "9999px",
     fontSize: "13px",
     fontWeight: "600",
     cursor: "pointer",
-    boxShadow: "0 6px 16px rgba(0,0,0,0.25)",
+    boxShadow: "0 4px 12px rgba(60,64,67,0.35)",
     fontFamily: "system-ui, -apple-system, sans-serif",
   } as Partial<CSSStyleDeclaration>);
 
