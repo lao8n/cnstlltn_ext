@@ -409,14 +409,20 @@ function App() {
   return (
     <div className="p-4 max-w-xl mx-auto text-sm space-y-4">
       <div className="flex justify-between items-center -mb-2">
-        <span className="text-xs opacity-60">
-          {s.settings?.model ? `model: ${s.settings.model}` : ""}
-        </span>
+        {s.settings?.model ? (
+          <span className="nt-chip" title="Model — change in settings">
+            {s.settings.model}
+          </span>
+        ) : (
+          <span />
+        )}
         <button
-          className="text-xs underline opacity-70"
+          className="nt-icon-btn"
+          title="Settings"
+          aria-label="Settings"
           onClick={() => chrome.runtime.openOptionsPage()}
         >
-          settings
+          <GearIcon />
         </button>
       </div>
 
@@ -615,6 +621,25 @@ function App() {
   );
 }
 
+function GearIcon() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+    </svg>
+  );
+}
+
 function AnimatedDots() {
   const [count, setCount] = useState(1);
   useEffect(() => {
@@ -643,7 +668,7 @@ function TabBar({ tab, onTab }: { tab: Tab; onTab: (t: Tab) => void }) {
           className={
             "px-3 py-1.5 text-sm font-medium border-b-2 -mb-px transition-colors " +
             (tab === t.id
-              ? "border-slate-900 dark:border-slate-100 opacity-100"
+              ? "border-[#4285F4] text-[#4285F4] opacity-100"
               : "border-transparent opacity-60 hover:opacity-100")
           }
         >
@@ -1059,14 +1084,14 @@ function RangeSlider(props: {
         }}
       >
         <Slider.Track className="relative grow h-1 rounded-full bg-black/15 dark:bg-white/20">
-          <Slider.Range className="absolute h-full rounded-full bg-blue-500" />
+          <Slider.Range className="absolute h-full rounded-full bg-[#4285F4]" />
         </Slider.Track>
         <Slider.Thumb
-          className="block w-4 h-4 rounded-full bg-blue-500 shadow ring-1 ring-black/10 focus:outline-none focus:ring-2 focus:ring-blue-400"
+          className="block w-4 h-4 rounded-full bg-[#4285F4] shadow ring-1 ring-black/10 focus:outline-none focus:ring-2 focus:ring-[#4285F4]"
           aria-label="Range start"
         />
         <Slider.Thumb
-          className="block w-4 h-4 rounded-full bg-blue-500 shadow ring-1 ring-black/10 focus:outline-none focus:ring-2 focus:ring-blue-400"
+          className="block w-4 h-4 rounded-full bg-[#4285F4] shadow ring-1 ring-black/10 focus:outline-none focus:ring-2 focus:ring-[#4285F4]"
           aria-label="Range end"
         />
       </Slider.Root>
@@ -1119,8 +1144,8 @@ function CandidateList(props: {
               className={
                 "relative rounded border px-3 py-2 pr-9 cursor-pointer transition-colors " +
                 (selected
-                  ? // selected notes use the same dark navy (matches the primary button) whether white or gold
-                    "bg-slate-900 text-slate-50 border-slate-900"
+                  ? // selected notes use the accent blue (matches the primary button) whether white or gold
+                    "bg-[#4285F4] text-white border-[#4285F4]"
                   : gold
                     ? "bg-amber-100 text-amber-950 border-amber-300 hover:bg-amber-200 dark:bg-amber-950 dark:text-amber-100 dark:border-amber-800 dark:hover:bg-amber-900"
                     : "border-slate-300 hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800")
@@ -1150,7 +1175,7 @@ function CandidateList(props: {
                 className={
                   "absolute top-1.5 right-2 text-lg font-semibold leading-none px-1 rounded " +
                   (selected
-                    ? "text-slate-50 hover:bg-slate-700"
+                    ? "text-white hover:bg-white/20"
                     : "opacity-60 hover:opacity-100 hover:bg-slate-200 dark:hover:bg-slate-700")
                 }
               >
@@ -1363,27 +1388,68 @@ function Styles() {
     <style>{`
       .nt-input {
         width: 100%;
-        padding: 6px 8px;
+        padding: 8px 10px;
         border: 1px solid rgba(120,120,120,0.4);
-        border-radius: 6px;
+        border-radius: 8px;
         background: transparent;
         font: inherit;
         color: inherit;
+        transition: border-color 0.15s, box-shadow 0.15s;
+      }
+      .nt-input:focus {
+        outline: none;
+        border-color: #4285F4;
+        box-shadow: 0 0 0 3px rgba(66,133,244,0.2);
       }
       .nt-btn {
-        padding: 6px 12px;
-        border-radius: 6px;
+        padding: 7px 16px;
+        border-radius: 9999px;
         border: 1px solid rgba(120,120,120,0.4);
         background: transparent;
         font-weight: 500;
         cursor: pointer;
+        transition: background 0.15s, box-shadow 0.15s, border-color 0.15s;
       }
+      .nt-btn:hover:not(:disabled) { background: rgba(120,120,120,0.1); }
       .nt-btn:disabled { opacity: 0.5; cursor: not-allowed; }
       .nt-btn-primary {
-        background: #0f172a;
-        color: #f8fafc;
-        border-color: #0f172a;
+        background: #4285F4;
+        color: #ffffff;
+        border-color: #4285F4;
       }
+      .nt-btn-primary:hover:not(:disabled) {
+        background: #3367d6;
+        border-color: #3367d6;
+        box-shadow: 0 1px 3px rgba(60,64,67,0.3);
+      }
+      /* low-emphasis model badge in the header */
+      .nt-chip {
+        display: inline-flex;
+        align-items: center;
+        padding: 2px 10px;
+        border-radius: 9999px;
+        font-size: 11px;
+        font-weight: 500;
+        letter-spacing: 0.01em;
+        color: rgba(120,120,120,0.95);
+        background: rgba(120,120,120,0.12);
+      }
+      /* circular settings button */
+      .nt-icon-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 32px;
+        height: 32px;
+        border-radius: 9999px;
+        border: none;
+        background: transparent;
+        color: inherit;
+        opacity: 0.7;
+        cursor: pointer;
+        transition: background 0.15s, opacity 0.15s;
+      }
+      .nt-icon-btn:hover { opacity: 1; background: rgba(120,120,120,0.15); }
     `}</style>
   );
 }

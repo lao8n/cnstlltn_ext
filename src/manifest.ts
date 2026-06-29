@@ -8,8 +8,18 @@ export default defineManifest({
   description:
     "Generate notes from YouTube transcripts via an LLM and commit them to your GitHub knowledge base.",
   version: pkg.version,
+  icons: {
+    16: "src/assets/icon-16.png",
+    32: "src/assets/icon-32.png",
+    48: "src/assets/icon-48.png",
+    128: "src/assets/icon-128.png",
+  },
   action: {
     default_title: "Open cnstlltn side panel",
+    default_icon: {
+      16: "src/assets/icon-16.png",
+      32: "src/assets/icon-32.png",
+    },
   },
   background: {
     service_worker: "src/background/index.ts",
