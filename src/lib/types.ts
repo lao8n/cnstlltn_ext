@@ -137,6 +137,27 @@ export interface Settings {
   model: string;
 }
 
+// A named GitHub repo the user can switch to while writing notes (e.g. an
+// "agents_notes" repo distinct from the default). `token` is optional — when
+// blank, the default Settings token is used (fine for a PAT covering both
+// repos). The Settings owner/repo/branch act as the implicit "default" profile.
+export interface RepoProfile {
+  id: string;
+  name: string;
+  owner: string;
+  repo: string;
+  branch: string;
+  token?: string;
+}
+
+// Fully-resolved repo the GitHub client should read/write right now.
+export interface RepoTarget {
+  owner: string;
+  repo: string;
+  branch: string;
+  token: string;
+}
+
 export interface SessionPayload {
   videoMeta: VideoMeta;
   cues: TranscriptCue[];

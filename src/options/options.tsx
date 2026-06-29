@@ -1,8 +1,14 @@
 import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { ulid } from "ulid";
 import "@/index.css";
-import { getSettings, setSettings } from "@/lib/storage";
-import type { Settings } from "@/lib/types";
+import {
+  getSettings,
+  setSettings,
+  getRepoProfiles,
+  setRepoProfiles,
+} from "@/lib/storage";
+import type { RepoProfile, Settings } from "@/lib/types";
 
 type Status =
   | { kind: "idle" }
@@ -149,6 +155,8 @@ function Options() {
         </Field>
       </Section>
 
+      <RepoProfilesEditor />
+
       <div className="flex gap-3 items-center">
         <button disabled={busy} onClick={save} className="nt-btn nt-btn-primary">
           Save
@@ -208,6 +216,112 @@ function Options() {
         }
       `}</style>
     </div>
+  );
+}
+
+function RepoProfilesEditor() {
+  const [profiles, setProfiles] = useState<RepoProfile[] | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
+
+  useEffect(() => {
+    void getRepoProfiles().then(setProfiles);
+  }, []);
+
+  if (!profiles) return null;
+
+  const update = (id: string, patch: Partial<RepoProfile>) =>
+    setProfiles(profiles.map((p) => (p.id === id ? { ...p, ...patch } : p)));
+  const add = () =>
+    setProfiles([
+      ...profiles,
+      { id: ulid(), name: "", owner: "", repo: "", branch: "main", token: "" },
+    ]);
+  const remove = (id: string) =>
+    setProfiles(profiles.filter((p) => p.id !== id));
+  const save = async () => {
+    const cleaned = profiles
+      .map((p) => ({ ...p, token: p.token?.trim() || undefined }))
+      .filter((p) => p.owner.trim() && p.repo.trim());
+    await setRepoProfiles(cleaned);
+    setProfiles(cleaned);
+    setStatus(
+      `Saved ${cleaned.length} profile${cleaned.length === 1 ? "" : "s"}.`,
+    );
+  };
+
+  return (
+    <Section title="Additional repo profiles">
+      <p className="text-sm opacity-70">
+        Extra repos you can switch to from the side panel while writing (e.g. an
+        agents-notes repo). Leave the token blank to reuse the default PAT above,
+        or set a per-repo token if your fine-grained PAT only covers one repo.
+      </p>
+      {profiles.length === 0 && (
+        <p className="text-sm opacity-60">No profiles yet.</p>
+      )}
+      {profiles.map((p) => (
+        <div key={p.id} className="border rounded p-3 space-y-2">
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Label">
+              <input
+                className="nt-input"
+                value={p.name}
+                placeholder="agents_notes"
+                onChange={(e) => update(p.id, { name: e.target.value })}
+              />
+            </Field>
+            <Field label="Branch">
+              <input
+                className="nt-input"
+                value={p.branch}
+                onChange={(e) => update(p.id, { branch: e.target.value })}
+              />
+            </Field>
+            <Field label="Owner">
+              <input
+                className="nt-input"
+                value={p.owner}
+                placeholder="your-username"
+                onChange={(e) => update(p.id, { owner: e.target.value })}
+              />
+            </Field>
+            <Field label="Repo">
+              <input
+                className="nt-input"
+                value={p.repo}
+                placeholder="agents_notes"
+                onChange={(e) => update(p.id, { repo: e.target.value })}
+              />
+            </Field>
+          </div>
+          <Field
+            label="Token (optional)"
+            hint="Leave blank to reuse the default PAT above."
+          >
+            <input
+              type="password"
+              className="nt-input"
+              value={p.token ?? ""}
+              placeholder="github_pat_…"
+              autoComplete="off"
+              onChange={(e) => update(p.id, { token: e.target.value })}
+            />
+          </Field>
+          <button className="nt-btn" onClick={() => remove(p.id)}>
+            Remove
+          </button>
+        </div>
+      ))}
+      <div className="flex gap-3 items-center">
+        <button className="nt-btn" onClick={add}>
+          Add profile
+        </button>
+        <button className="nt-btn nt-btn-primary" onClick={save}>
+          Save profiles
+        </button>
+        {status && <span className="text-sm opacity-70">{status}</span>}
+      </div>
+    </Section>
   );
 }
 

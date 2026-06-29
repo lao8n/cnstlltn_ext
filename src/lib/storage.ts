@@ -1,4 +1,4 @@
-import type { Settings } from "./types";
+import type { RepoProfile, RepoTarget, Settings } from "./types";
 import { DEFAULT_MODEL } from "./types";
 
 const SETTINGS_KEY = "settings";
@@ -22,6 +22,55 @@ export async function setSettings(patch: Partial<Settings>): Promise<Settings> {
   const merged = { ...current, ...patch };
   await chrome.storage.local.set({ [SETTINGS_KEY]: merged });
   return merged;
+}
+
+// --- Repo profiles -------------------------------------------------------
+// Additional named repos beyond the default (Settings owner/repo). The active
+// profile drives the GitHub client for ALL reads/writes; `null` = the default.
+
+const REPO_PROFILES_KEY = "repoProfiles";
+const ACTIVE_PROFILE_KEY = "activeRepoProfileId";
+
+export async function getRepoProfiles(): Promise<RepoProfile[]> {
+  const stored = await chrome.storage.local.get(REPO_PROFILES_KEY);
+  return (stored[REPO_PROFILES_KEY] ?? []) as RepoProfile[];
+}
+
+export async function setRepoProfiles(profiles: RepoProfile[]): Promise<void> {
+  await chrome.storage.local.set({ [REPO_PROFILES_KEY]: profiles });
+}
+
+export async function getActiveProfileId(): Promise<string | null> {
+  const stored = await chrome.storage.local.get(ACTIVE_PROFILE_KEY);
+  return (stored[ACTIVE_PROFILE_KEY] ?? null) as string | null;
+}
+
+export async function setActiveProfileId(id: string | null): Promise<void> {
+  await chrome.storage.local.set({ [ACTIVE_PROFILE_KEY]: id });
+}
+
+// Resolve the repo the GitHub client should read/write right now. Falls back to
+// the default repo (Settings) when no profile is active or the id is stale.
+export async function getActiveRepoTarget(): Promise<RepoTarget> {
+  const settings = await getSettings();
+  const activeId = await getActiveProfileId();
+  if (activeId) {
+    const profile = (await getRepoProfiles()).find((p) => p.id === activeId);
+    if (profile) {
+      return {
+        owner: profile.owner,
+        repo: profile.repo,
+        branch: profile.branch || "main",
+        token: profile.token?.trim() || settings.githubToken,
+      };
+    }
+  }
+  return {
+    owner: settings.githubOwner,
+    repo: settings.githubRepo,
+    branch: settings.githubBranch || "main",
+    token: settings.githubToken,
+  };
 }
 
 const SESSION_KEY = "session";

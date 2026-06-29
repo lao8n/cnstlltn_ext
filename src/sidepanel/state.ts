@@ -3,6 +3,7 @@ import type {
   AnalysisCard,
   AnalysisLens,
   LLMNote,
+  RepoProfile,
   SessionPayload,
   Settings,
 } from "@/lib/types";
@@ -44,6 +45,10 @@ interface State {
   phase: Phase;
   errorMessage: string | null;
   settings: Settings | null;
+  // Extra named repos + which one is active (null = the default repo from
+  // Settings). The active profile drives where notes are read from / written to.
+  repoProfiles: RepoProfile[];
+  activeRepoProfileId: string | null;
   session: SessionPayload | null;
   topics: string[];
   selectedTopic: string;
@@ -80,6 +85,8 @@ interface Actions {
   setPhase: (p: Phase) => void;
   setError: (m: string | null) => void;
   setSettings: (s: Settings | null) => void;
+  setRepoProfiles: (p: RepoProfile[]) => void;
+  setActiveRepoProfileId: (id: string | null) => void;
   setSession: (s: SessionPayload | null) => void;
   setTopics: (t: string[]) => void;
   pickTopic: (t: string) => void;
@@ -131,6 +138,8 @@ export const useStore = create<State & Actions>((set) => ({
   phase: "loading",
   errorMessage: null,
   settings: null,
+  repoProfiles: [],
+  activeRepoProfileId: null,
   session: null,
   topics: [],
   selectedTopic: "",
@@ -154,6 +163,8 @@ export const useStore = create<State & Actions>((set) => ({
   setPhase: (phase) => set({ phase }),
   setError: (errorMessage) => set({ errorMessage }),
   setSettings: (settings) => set({ settings }),
+  setRepoProfiles: (repoProfiles) => set({ repoProfiles }),
+  setActiveRepoProfileId: (activeRepoProfileId) => set({ activeRepoProfileId }),
   setSession: (session) => set({ session }),
   setTopics: (topics) => set({ topics }),
   pickTopic: (selectedTopic) =>

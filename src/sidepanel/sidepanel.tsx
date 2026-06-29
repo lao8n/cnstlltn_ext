@@ -3,12 +3,18 @@ import { createRoot } from "react-dom/client";
 import { ulid } from "ulid";
 import * as Slider from "@radix-ui/react-slider";
 import "@/index.css";
-import { getSettings } from "@/lib/storage";
+import {
+  getSettings,
+  getRepoProfiles,
+  getActiveProfileId,
+  setActiveProfileId,
+} from "@/lib/storage";
 import type {
   AnalysisCard,
   AnalysisLens,
   CommitResult,
   LLMNote,
+  RepoProfile,
   SessionPayload,
   Settings,
 } from "@/lib/types";
@@ -66,6 +72,12 @@ function App() {
     s.setError(null);
     const settings = await getSettings();
     s.setSettings(settings);
+    const [profiles, activeId] = await Promise.all([
+      getRepoProfiles(),
+      getActiveProfileId(),
+    ]);
+    s.setRepoProfiles(profiles);
+    s.setActiveRepoProfileId(activeId);
     if (!isSettingsComplete(settings)) {
       s.setPhase("no-settings");
       return;
@@ -320,6 +332,24 @@ function App() {
     }
   }
 
+  // Switch the repo we read/write. The active profile is persisted (the GitHub
+  // client reads it on every call), so we just re-fetch topics for the new repo.
+  async function onChangeRepo(id: string | null) {
+    await setActiveProfileId(id);
+    s.setActiveRepoProfileId(id);
+    s.pickTopic("");
+    s.setIsNewTopic(false);
+    s.setNewTopicTitle("");
+    s.pickAnalyseTopic("");
+    try {
+      const topics = await send<string[]>({ type: "LIST_TOPICS" });
+      s.setTopics(topics);
+    } catch (err) {
+      console.warn("Could not list topics for repo:", err);
+      s.setTopics([]);
+    }
+  }
+
   return (
     <div className="p-4 max-w-xl mx-auto text-sm space-y-4">
       <div className="flex justify-between items-center -mb-2">
@@ -333,6 +363,15 @@ function App() {
           settings
         </button>
       </div>
+
+      {s.phase !== "loading" && s.phase !== "no-settings" && (
+        <RepoPicker
+          settings={s.settings}
+          profiles={s.repoProfiles}
+          activeId={s.activeRepoProfileId}
+          onChange={onChangeRepo}
+        />
+      )}
 
       {s.phase === "loading" && <div>Loading…</div>}
 
@@ -666,6 +705,38 @@ function AnalyseView(props: {
         !props.error && (
           <div className="opacity-70">No results returned. Try again.</div>
         )}
+    </div>
+  );
+}
+
+// Dropdown to choose which repo notes are read from / written to. Only shown
+// when the user has configured extra profiles beyond the default repo.
+function RepoPicker(props: {
+  settings: Settings | null;
+  profiles: RepoProfile[];
+  activeId: string | null;
+  onChange: (id: string | null) => void;
+}) {
+  if (props.profiles.length === 0) return null;
+  const defaultLabel =
+    props.settings?.githubOwner && props.settings?.githubRepo
+      ? `${props.settings.githubOwner}/${props.settings.githubRepo}`
+      : "default repo";
+  return (
+    <div className="flex items-center gap-2">
+      <label className="text-xs opacity-70 whitespace-nowrap">Saving to</label>
+      <select
+        className="nt-input py-1"
+        value={props.activeId ?? ""}
+        onChange={(e) => props.onChange(e.target.value || null)}
+      >
+        <option value="">{defaultLabel} (default)</option>
+        {props.profiles.map((p) => (
+          <option key={p.id} value={p.id}>
+            {p.name || `${p.owner}/${p.repo}`}
+          </option>
+        ))}
+      </select>
     </div>
   );
 }
