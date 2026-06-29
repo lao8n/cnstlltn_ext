@@ -26,12 +26,21 @@ export const LLMNote = z.object({
     .number()
     .int()
     .nonnegative()
-    .describe("Seconds into the source where this idea begins."),
+    .optional()
+    .describe("Seconds where this idea begins (video sources only)."),
   end_seconds: z
     .number()
     .int()
     .nonnegative()
-    .describe("Seconds into the source where this idea ends."),
+    .optional()
+    .describe("Seconds where this idea ends (video sources only)."),
+  quote: z
+    .string()
+    .nullable()
+    .optional()
+    .describe(
+      "Short verbatim quote anchoring this note in the source (article/web sources).",
+    ),
   flag: z
     .boolean()
     .describe(
@@ -72,12 +81,21 @@ export const AnalysisResult = z.object({
 });
 export type AnalysisResult = z.infer<typeof AnalysisResult>;
 
+export type SourceType = "youtube" | "article" | "tweet" | "web";
+
+// Generalised source descriptor. YouTube populates videoId/channel/duration;
+// article/tweet/web populate site/author/published. `type` is absent on
+// sessions stored before this change → treat as "youtube".
 export interface VideoMeta {
   videoId: string;
   url: string;
   title: string;
   channel: string;
   durationSeconds: number | null;
+  type?: SourceType;
+  site?: string;
+  author?: string;
+  published?: string | null;
 }
 
 export interface TranscriptCue {
@@ -94,14 +112,20 @@ export interface NoteFrontmatter {
   updated: string;
   schema_version: number;
   source: {
-    type: "youtube";
+    type: SourceType;
     url: string;
     source_id: string;
-    video_id: string;
-    channel: string;
-    start_seconds: number;
-    end_seconds: number;
-    speaker: string | null;
+    // video sources
+    video_id?: string;
+    channel?: string;
+    start_seconds?: number;
+    end_seconds?: number;
+    speaker?: string | null;
+    // article / web / tweet sources
+    site?: string;
+    author?: string;
+    published?: string | null;
+    quote?: string | null;
   };
   parents: string[];
   children: string[];
@@ -162,6 +186,9 @@ export interface SessionPayload {
   videoMeta: VideoMeta;
   cues: TranscriptCue[];
   transcriptVtt: string;
+  // Article/web/tweet sources: the extracted clean text fed to the LLM.
+  // Empty/absent for YouTube (which uses cues instead).
+  text?: string;
 }
 
 export type Msg =

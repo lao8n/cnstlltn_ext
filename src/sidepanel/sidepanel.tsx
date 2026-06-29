@@ -8,7 +8,13 @@ import {
   getRepoProfiles,
   getActiveProfileId,
   setActiveProfileId,
+  setSession,
 } from "@/lib/storage";
+import {
+  extractActivePage,
+  buildPastedArticle,
+  type ExtractedArticle,
+} from "@/lib/extract";
 import type {
   AnalysisCard,
   AnalysisLens,
@@ -55,6 +61,7 @@ function App() {
   // Closure that re-runs the last action that hit an error. Set on every
   // catch; cleared on success. Wired to the Retry button in the error phase.
   const retryRef = React.useRef<(() => void | Promise<void>) | null>(null);
+  const [articleEntryOpen, setArticleEntryOpen] = useState(false);
 
   useEffect(() => {
     void bootstrap();
@@ -141,14 +148,19 @@ function App() {
     s.setPhase("generating");
     try {
       let session = await send<SessionPayload | null>({ type: "GET_SESSION" });
-      // Transcript is scraped lazily — the first time we generate for a video.
-      // If we don't have cues yet, ask the active tab to extract them now.
-      if (!session || session.cues.length === 0) {
-        await extractTranscriptForActiveTab();
-        session = await send<SessionPayload | null>({ type: "GET_SESSION" });
-      }
-      if (!session || session.cues.length === 0) {
-        throw new Error("Couldn't read a transcript for this video.");
+      const isVideo =
+        !session?.videoMeta.type || session.videoMeta.type === "youtube";
+      if (isVideo) {
+        // Transcript is scraped lazily — the first time we generate for a video.
+        if (!session || session.cues.length === 0) {
+          await extractTranscriptForActiveTab();
+          session = await send<SessionPayload | null>({ type: "GET_SESSION" });
+        }
+        if (!session || session.cues.length === 0) {
+          throw new Error("Couldn't read a transcript for this video.");
+        }
+      } else if (!session || !session.text) {
+        throw new Error("No article text to generate from.");
       }
       s.setSession(session);
       // Pull existing notes' bodies for the topic — used as gold-note context.
@@ -332,6 +344,50 @@ function App() {
     }
   }
 
+  // Store an extracted article as the active session and move to the topic
+  // picker (same flow YouTube uses, minus the transcript).
+  async function startArticle(extracted: ExtractedArticle) {
+    const payload: SessionPayload = {
+      videoMeta: extracted.videoMeta,
+      cues: [],
+      transcriptVtt: "",
+      text: extracted.text,
+    };
+    await setSession(payload);
+    s.setSession(payload);
+    s.clearStack();
+    s.setRange(null, null);
+    s.pickTopic("");
+    s.setIsNewTopic(false);
+    s.setNewTopicTitle("");
+    try {
+      const topics = await send<string[]>({ type: "LIST_TOPICS" });
+      s.setTopics(topics);
+    } catch {
+      /* leave topics as-is */
+    }
+    setArticleEntryOpen(false);
+    s.setPhase("topic-picker");
+  }
+
+  async function onExtract(mode: "article" | "selection") {
+    s.setError(null);
+    try {
+      await startArticle(await extractActivePage(mode));
+    } catch (err) {
+      s.setError((err as Error).message);
+    }
+  }
+
+  async function onPaste(args: { text: string; title: string; url: string }) {
+    s.setError(null);
+    try {
+      await startArticle(buildPastedArticle(args));
+    } catch (err) {
+      s.setError((err as Error).message);
+    }
+  }
+
   // Switch the repo we read/write. The active profile is persisted (the GitHub
   // client reads it on every call), so we just re-fetch topics for the new repo.
   async function onChangeRepo(id: string | null) {
@@ -418,13 +474,28 @@ function App() {
               </div>
             )}
 
+            <div className="flex justify-end -mt-1">
+              <button
+                className="text-xs underline opacity-70 hover:opacity-100"
+                onClick={() => setArticleEntryOpen((v) => !v)}
+              >
+                {articleEntryOpen ? "close" : "＋ article / paste"}
+              </button>
+            </div>
+
+            {(articleEntryOpen || s.phase === "no-session") && (
+              <ArticleEntry
+                onExtractArticle={() => onExtract("article")}
+                onExtractSelection={() => onExtract("selection")}
+                onPaste={onPaste}
+              />
+            )}
+
             {s.phase === "no-session" && (
-              <div className="space-y-2">
-                <p>
-                  No active video. Go to a YouTube watch page and click the 📝
-                  cnstlltn button.
-                </p>
-              </div>
+              <p className="text-xs opacity-70">
+                Or open a YouTube video and click the 📝 cnstlltn button to use
+                its transcript.
+              </p>
             )}
 
             {s.phase !== "no-session" && <VideoCard session={s.session} />}
@@ -741,6 +812,65 @@ function RepoPicker(props: {
   );
 }
 
+// Entry point for non-YouTube sources: extract the current page (Readability),
+// use the current selection, or paste text manually.
+function ArticleEntry(props: {
+  onExtractArticle: () => void;
+  onExtractSelection: () => void;
+  onPaste: (args: { text: string; title: string; url: string }) => void;
+}) {
+  const [showPaste, setShowPaste] = useState(false);
+  const [text, setText] = useState("");
+  const [title, setTitle] = useState("");
+  const [url, setUrl] = useState("");
+  return (
+    <div className="space-y-2 rounded border border-slate-300 dark:border-slate-700 p-3">
+      <div className="text-xs font-medium opacity-80">Add a source</div>
+      <div className="flex flex-wrap gap-2">
+        <button className="nt-btn" onClick={props.onExtractArticle}>
+          Extract article
+        </button>
+        <button className="nt-btn" onClick={props.onExtractSelection}>
+          Use selection
+        </button>
+        <button className="nt-btn" onClick={() => setShowPaste((v) => !v)}>
+          Paste text
+        </button>
+      </div>
+      {showPaste && (
+        <div className="space-y-2 pt-1">
+          <input
+            className="nt-input"
+            placeholder="Title"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+          />
+          <input
+            className="nt-input"
+            placeholder="Source URL (optional)"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+          />
+          <textarea
+            className="nt-input"
+            rows={6}
+            placeholder="Paste the article text…"
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+          />
+          <button
+            className="nt-btn nt-btn-primary"
+            disabled={!text.trim()}
+            onClick={() => props.onPaste({ text, title, url })}
+          >
+            Use pasted text
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function VideoCard({ session }: { session: SessionPayload | null }) {
   if (!session) return null;
   return (
@@ -1002,7 +1132,12 @@ function CandidateList(props: {
                   {n.content}
                 </div>
                 <div className="text-xs opacity-60">
-                  {n.claim_type} · {formatTs(n.start_seconds)} – {formatTs(n.end_seconds)}
+                  {n.claim_type}
+                  {n.start_seconds != null && n.end_seconds != null
+                    ? ` · ${formatTs(n.start_seconds)} – ${formatTs(n.end_seconds)}`
+                    : n.quote
+                      ? ` · “${n.quote.slice(0, 60)}${n.quote.length > 60 ? "…" : ""}”`
+                      : ""}
                 </div>
               </div>
               <button

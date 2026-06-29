@@ -60,8 +60,8 @@ export function refineNoteTimestamps(
   const lastEnd = Math.ceil(cues[cues.length - 1].endSeconds);
 
   return notes.map((note) => {
-    let start = Math.max(0, Math.min(note.start_seconds, lastEnd));
-    let end = Math.max(0, Math.min(note.end_seconds, lastEnd));
+    let start = Math.max(0, Math.min(note.start_seconds ?? 0, lastEnd));
+    let end = Math.max(0, Math.min(note.end_seconds ?? lastEnd, lastEnd));
 
     if (bounds) {
       start = Math.max(bounds.minSeconds, start);

@@ -130,6 +130,7 @@ async function callNoteGenerator(args: {
   userPrompt: string;
   model: string;
   minWords: number;
+  schema?: object;
 }): Promise<LLMNote[]> {
   const ai = await getClient();
   let userPrompt = args.userPrompt;
@@ -146,7 +147,7 @@ async function callNoteGenerator(args: {
       config: {
         systemInstruction: args.systemPrompt,
         responseMimeType: "application/json",
-        responseSchema: NOTES_SCHEMA,
+        responseSchema: args.schema ?? NOTES_SCHEMA,
       },
     });
     const raw = response.text;
@@ -216,6 +217,108 @@ TIMESTAMPS: for each note, set start_seconds and end_seconds from the (Ns) integ
     minWords: MIN_ROOT_WORDS,
   });
   return refineNoteTimestamps(notes, args.cues);
+}
+
+const ARTICLE_SYSTEM_PROMPT = `You are an assistant that converts an article or web page into atomic, reusable knowledge-base notes for a personal mind map.
+
+Rules:
+- Each note is a single self-contained idea: argument, fact, definition, counter-argument, illustrative example, or open question.
+- Notes must be drawn from what the article actually says. Do not invent.
+- Note bodies are plain prose markdown. No leading heading. No bullet/number prefix. No filler like "the author says".
+- LENGTH: keep each note concise — roughly 80–100 words (about 4–6 sentences), never more than ~120 words. Capture the core claim plus its single most important piece of supporting evidence, reasoning, or caveat. Omit padding.
+- quote: a SHORT verbatim quote (one sentence or phrase) copied EXACTLY from the article that anchors the note, or null if no single line captures it. Used later for verification.
+- Tags are short lowercase keywords useful for clustering (3-6 per note).
+- flag is true when the article clearly contains more detail on this note than your summary captures.
+- gold: set to true ONLY when a TOPIC GOAL is provided AND the note clearly (a) advances that goal AND (b) is not substantially covered by any note in the EXISTING NOTES list. Otherwise false.
+- speaker is the person the idea is attributed to if clear, else null.
+
+Aim for 5–10 candidate notes. Prefer fewer, richly detailed notes over many shallow ones.`;
+
+const ARTICLE_NOTE_PROPS = {
+  title: { type: Type.STRING, description: "Concise title for the note." },
+  content: {
+    type: Type.STRING,
+    description:
+      "Concise note body: ~80-100 words (about 4-6 sentences), never more than ~120. Plain prose markdown. Core idea plus key support; no padding.",
+  },
+  claim_type: {
+    type: Type.STRING,
+    enum: ["argument", "fact", "definition", "counter", "example", "question"],
+  },
+  tags: { type: Type.ARRAY, items: { type: Type.STRING } },
+  quote: {
+    type: Type.STRING,
+    nullable: true,
+    description:
+      "Short verbatim quote copied exactly from the article anchoring this note, or null.",
+  },
+  flag: { type: Type.BOOLEAN },
+  gold: {
+    type: Type.BOOLEAN,
+    description:
+      "True ONLY if a topic goal is provided AND the note advances it AND isn't substantially covered by existing notes. Otherwise false.",
+  },
+  speaker: { type: Type.STRING, nullable: true },
+};
+
+const ARTICLE_NOTES_SCHEMA = {
+  type: Type.OBJECT,
+  properties: {
+    notes: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: ARTICLE_NOTE_PROPS,
+        required: [
+          "title",
+          "content",
+          "claim_type",
+          "tags",
+          "quote",
+          "flag",
+          "gold",
+          "speaker",
+        ],
+        propertyOrdering: [
+          "title",
+          "content",
+          "claim_type",
+          "tags",
+          "quote",
+          "flag",
+          "gold",
+          "speaker",
+        ],
+      },
+    },
+  },
+  required: ["notes"],
+};
+
+export async function generateArticleNotes(args: {
+  text: string;
+  title: string;
+  site: string;
+  topicGoal?: string | null;
+  existingNotes?: { title: string; content: string }[] | null;
+}): Promise<LLMNote[]> {
+  const { model } = await getSettings();
+  const userPrompt = `Article title: ${args.title}
+Source: ${args.site}
+
+Article text:
+${args.text}
+
+Produce candidate notes following the rules in the system message.
+
+CRITICAL: keep each note "content" concise — about 80–100 words (4–6 sentences) and no more than ~120 words. For each note set "quote" to a short verbatim line copied from the article that anchors it, or null.${goldContextBlock(args)}`;
+  return callNoteGenerator({
+    systemPrompt: ARTICLE_SYSTEM_PROMPT,
+    userPrompt,
+    model,
+    minWords: MIN_ROOT_WORDS,
+    schema: ARTICLE_NOTES_SCHEMA,
+  });
 }
 
 export async function generateDrillNotes(args: {

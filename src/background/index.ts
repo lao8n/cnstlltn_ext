@@ -1,10 +1,16 @@
 import { github, type FileToCommit } from "./github";
-import { generateRootNotes, generateDrillNotes, generateAnalysis } from "./llm";
+import {
+  generateRootNotes,
+  generateDrillNotes,
+  generateAnalysis,
+  generateArticleNotes,
+} from "./llm";
 import { getSession, setSession } from "@/lib/storage";
 import {
   KB_PATHS,
   buildFrontmatter,
   buildSourceMd,
+  buildWebSourceMd,
   buildTopicMd,
   serialiseNote,
   sha256Hex,
@@ -114,7 +120,20 @@ async function onTranscriptReady(
 
 async function runGenerateRoot(msg: Extract<Msg, { type: "GENERATE_ROOT" }>) {
   const session = await getSession<SessionPayload>();
-  if (!session) throw new Error("No active transcript session.");
+  if (!session) throw new Error("No active source.");
+  // Non-video sources (article/web/tweet) generate from extracted text.
+  const sourceType = session.videoMeta.type ?? "youtube";
+  if (sourceType !== "youtube") {
+    if (!session.text) throw new Error("No article text to generate from.");
+    const notes = await generateArticleNotes({
+      text: session.text,
+      title: session.videoMeta.title,
+      site: session.videoMeta.site || session.videoMeta.channel || "",
+      topicGoal: msg.topicGoal ?? null,
+      existingNotes: msg.existingNotes ?? null,
+    });
+    return { topic: msg.topic, notes };
+  }
   // Restrict cues to the user-chosen time window if one was set. Cues that
   // overlap the window edges (start_seconds <= window end AND end_seconds
   // >= window start) are kept so we never cut a sentence in half.
@@ -198,23 +217,39 @@ async function runCommit(msg: Extract<Msg, { type: "COMMIT_NOTES" }>) {
     });
   }
 
-  const transcriptPath = KB_PATHS.transcriptVtt(
-    msg.topic,
-    session.videoMeta.videoId,
-  );
-  if (msg.includeTranscript && !(await github.pathExists(transcriptPath))) {
-    files.push({
-      path: transcriptPath,
-      content: session.transcriptVtt,
-    });
-    files.push({
-      path: KB_PATHS.sourceMd(msg.topic, session.videoMeta.videoId),
-      content: buildSourceMd({
-        video: session.videoMeta,
-        fetchedAt: new Date(),
-        transcriptPath,
-      }),
-    });
+  const sourceType = session.videoMeta.type ?? "youtube";
+  if (sourceType === "youtube") {
+    const transcriptPath = KB_PATHS.transcriptVtt(
+      msg.topic,
+      session.videoMeta.videoId,
+    );
+    if (msg.includeTranscript && !(await github.pathExists(transcriptPath))) {
+      files.push({
+        path: transcriptPath,
+        content: session.transcriptVtt,
+      });
+      files.push({
+        path: KB_PATHS.sourceMd(msg.topic, session.videoMeta.videoId),
+        content: buildSourceMd({
+          video: session.videoMeta,
+          fetchedAt: new Date(),
+          transcriptPath,
+        }),
+      });
+    }
+  } else {
+    // Article / web / tweet: archive a source.md (no transcript).
+    const sourceId = `${sourceType}-${session.videoMeta.videoId}`;
+    const sourcePath = KB_PATHS.webSourceMd(msg.topic, sourceId);
+    if (!(await github.pathExists(sourcePath))) {
+      files.push({
+        path: sourcePath,
+        content: buildWebSourceMd({
+          video: session.videoMeta,
+          fetchedAt: new Date(),
+        }),
+      });
+    }
   }
 
   for (const note of msg.notes) {

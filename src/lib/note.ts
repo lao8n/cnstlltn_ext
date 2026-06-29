@@ -46,6 +46,29 @@ export function buildFrontmatter(args: {
   now?: Date;
 }): NoteFrontmatter {
   const now = (args.now ?? new Date()).toISOString();
+  const type = args.video.type ?? "youtube";
+  const source: NoteFrontmatter["source"] =
+    type === "youtube"
+      ? {
+          type,
+          url: args.video.url,
+          source_id: `yt-${args.video.videoId}`,
+          video_id: args.video.videoId,
+          channel: args.video.channel,
+          start_seconds: args.llmNote.start_seconds,
+          end_seconds: args.llmNote.end_seconds,
+          speaker: args.llmNote.speaker,
+        }
+      : {
+          type,
+          url: args.video.url,
+          source_id: `${type}-${args.video.videoId}`,
+          site: args.video.site,
+          author: args.video.author || undefined,
+          published: args.video.published ?? null,
+          quote: args.llmNote.quote ?? null,
+          speaker: args.llmNote.speaker,
+        };
   return {
     id: args.id,
     title: args.llmNote.title,
@@ -53,16 +76,7 @@ export function buildFrontmatter(args: {
     created: now,
     updated: now,
     schema_version: SCHEMA_VERSION,
-    source: {
-      type: "youtube",
-      url: args.video.url,
-      source_id: `yt-${args.video.videoId}`,
-      video_id: args.video.videoId,
-      channel: args.video.channel,
-      start_seconds: args.llmNote.start_seconds,
-      end_seconds: args.llmNote.end_seconds,
-      speaker: args.llmNote.speaker,
-    },
+    source,
     parents: args.parents,
     children: [],
     related: [],
@@ -164,6 +178,26 @@ export function buildSourceMd(args: {
   return `---\n${yaml.dump(fm, { lineWidth: 100, noRefs: true })}---\n\n# ${args.video.title}\n\n[${args.video.url}](${args.video.url})\n`;
 }
 
+// Source archive for an article / web / tweet source (no transcript).
+export function buildWebSourceMd(args: {
+  video: VideoMeta;
+  fetchedAt: Date;
+}): string {
+  const v = args.video;
+  const fm = {
+    id: `${v.type ?? "web"}-${v.videoId}`,
+    type: v.type ?? "web",
+    url: v.url,
+    title: v.title,
+    site: v.site ?? "",
+    author: v.author ?? "",
+    published: v.published ?? null,
+    fetched_at: args.fetchedAt.toISOString(),
+    schema_version: SCHEMA_VERSION,
+  };
+  return `---\n${yaml.dump(fm, { lineWidth: 100, noRefs: true })}---\n\n# ${v.title}\n\n[${v.url}](${v.url})\n`;
+}
+
 export function buildKbConfig(): string {
   return `${yaml.dump(
     {
@@ -186,6 +220,8 @@ export const KB_PATHS = {
   sourcesDir: (topic: string) => `topics/${topic}/sources`,
   sourceMd: (topic: string, videoId: string) =>
     `topics/${topic}/sources/yt-${videoId}.md`,
+  webSourceMd: (topic: string, sourceId: string) =>
+    `topics/${topic}/sources/${sourceId}.md`,
   transcriptsDir: (topic: string) => `topics/${topic}/sources/transcripts`,
   transcriptVtt: (topic: string, videoId: string) =>
     `topics/${topic}/sources/transcripts/yt-${videoId}.vtt`,
