@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { ulid } from "ulid";
 import "@/index.css";
+import logoUrl from "@/assets/logo.svg";
 import {
   getSettings,
   setSettings,
@@ -67,12 +68,22 @@ function Options() {
 
   return (
     <div className="max-w-2xl mx-auto p-8 space-y-6">
-      <header className="space-y-1">
-        <h1 className="text-2xl font-semibold">cnstlltn settings</h1>
-        <p className="text-sm opacity-70">
-          BYOK — all keys stay in this browser's local storage. Nothing is sent
-          to any server other than Google Gemini and GitHub directly.
-        </p>
+      <header className="nt-animate-rise flex items-center gap-3">
+        <img
+          src={logoUrl}
+          alt=""
+          className="w-11 h-11 rounded-xl shadow-sm"
+          draggable={false}
+        />
+        <div className="space-y-0.5">
+          <h1 className="text-2xl font-semibold tracking-tight">
+            cnstlltn settings
+          </h1>
+          <p className="text-sm opacity-70">
+            BYOK — all keys stay in this browser's local storage. Nothing is
+            sent anywhere except Google Gemini and GitHub directly.
+          </p>
+        </div>
       </header>
 
       <Section title="Gemini">
@@ -180,7 +191,7 @@ function Options() {
       {status.kind !== "idle" && (
         <div
           className={
-            "text-sm rounded px-3 py-2 " +
+            "nt-animate-pop text-sm rounded-lg px-3 py-2 " +
             (status.kind === "ok"
               ? "bg-emerald-100 text-emerald-900 dark:bg-emerald-950 dark:text-emerald-100"
               : "bg-rose-100 text-rose-900 dark:bg-rose-950 dark:text-rose-100")
@@ -195,24 +206,38 @@ function Options() {
           width: 100%;
           padding: 8px 10px;
           border: 1px solid rgba(120,120,120,0.4);
-          border-radius: 6px;
+          border-radius: 8px;
           background: transparent;
           font: inherit;
           color: inherit;
+          transition: border-color 0.15s, box-shadow 0.15s;
+        }
+        .nt-input:focus {
+          outline: none;
+          border-color: #4285F4;
+          box-shadow: 0 0 0 3px rgba(66,133,244,0.2);
         }
         .nt-btn {
-          padding: 8px 14px;
-          border-radius: 6px;
+          padding: 8px 18px;
+          border-radius: 9999px;
           border: 1px solid rgba(120,120,120,0.4);
           background: transparent;
           font-weight: 500;
           cursor: pointer;
+          transition: background 0.15s, box-shadow 0.15s, border-color 0.15s,
+            transform 0.08s;
         }
+        .nt-btn:hover:not(:disabled) { background: rgba(120,120,120,0.1); }
         .nt-btn:disabled { opacity: 0.5; cursor: not-allowed; }
         .nt-btn-primary {
-          background: #0f172a;
-          color: #f8fafc;
-          border-color: #0f172a;
+          background: #4285F4;
+          color: #ffffff;
+          border-color: #4285F4;
+        }
+        .nt-btn-primary:hover:not(:disabled) {
+          background: #3367d6;
+          border-color: #3367d6;
+          box-shadow: 0 1px 3px rgba(60,64,67,0.3);
         }
       `}</style>
     </div>
@@ -260,7 +285,7 @@ function RepoProfilesEditor() {
         <p className="text-sm opacity-60">No profiles yet.</p>
       )}
       {profiles.map((p) => (
-        <div key={p.id} className="border rounded p-3 space-y-2">
+        <div key={p.id} className="nt-animate-rise border rounded-lg p-3 space-y-2">
           <div className="grid grid-cols-2 gap-3">
             <Field label="Label">
               <input

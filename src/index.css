@@ -23,3 +23,42 @@ body {
     color: #f4f4f5;
   }
 }
+
+/* ── Micro-interactions ───────────────────────────────────────────────── */
+@keyframes nt-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes nt-rise {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes nt-pop {
+  0% { opacity: 0; transform: scale(0.96); }
+  100% { opacity: 1; transform: scale(1); }
+}
+@keyframes nt-check {
+  to { stroke-dashoffset: 0; }
+}
+
+.nt-animate-fade { animation: nt-fade-in 0.3s ease both; }
+.nt-animate-rise { animation: nt-rise 0.28s cubic-bezier(0.2, 0.7, 0.3, 1) both; }
+.nt-animate-pop { animation: nt-pop 0.24s cubic-bezier(0.2, 0.7, 0.3, 1) both; }
+
+/* Tactile press for any branded button */
+.nt-btn:active:not(:disabled) { transform: scale(0.97); }
+
+/* Drawn-on commit checkmark */
+.nt-check-path {
+  stroke-dasharray: 24;
+  stroke-dashoffset: 24;
+  animation: nt-check 0.4s 0.1s ease forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nt-animate-fade,
+  .nt-animate-rise,
+  .nt-animate-pop { animation: none; }
+  .nt-btn:active:not(:disabled) { transform: none; }
+  .nt-check-path { stroke-dashoffset: 0; animation: none; }
+}

@@ -629,7 +629,7 @@ function App() {
 
 function EmptyHero() {
   return (
-    <div className="flex flex-col items-center text-center gap-2 pt-4 pb-1">
+    <div className="nt-animate-rise flex flex-col items-center text-center gap-2 pt-4 pb-1">
       <img
         src={logoUrl}
         alt=""
@@ -642,6 +642,29 @@ function EmptyHero() {
         base.
       </p>
     </div>
+  );
+}
+
+function CheckCircle() {
+  return (
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      className="shrink-0 mt-0.5"
+      aria-hidden="true"
+    >
+      <circle cx="12" cy="12" r="10" className="fill-emerald-500/20" />
+      <path
+        d="M7.5 12.5l3 3 6-6.5"
+        className="nt-check-path"
+        stroke="currentColor"
+        strokeWidth="2.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
   );
 }
 
@@ -808,7 +831,8 @@ function AnalyseView(props: {
           {props.cards.map((c, i) => (
             <li
               key={i}
-              className="rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-2 space-y-1"
+              style={{ animationDelay: `${Math.min(i, 8) * 35}ms` }}
+              className="nt-animate-rise rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-2 space-y-1"
             >
               <div className="font-medium">{c.title}</div>
               <div className="text-xs opacity-80 whitespace-pre-wrap">
@@ -1168,8 +1192,9 @@ function CandidateList(props: {
                   props.onToggle(i);
                 }
               }}
+              style={{ animationDelay: `${Math.min(i, 8) * 35}ms` }}
               className={
-                "relative rounded-lg border px-3 py-2 pr-9 cursor-pointer transition-colors " +
+                "nt-animate-rise relative rounded-lg border px-3 py-2 pr-9 cursor-pointer transition-colors " +
                 (selected
                   ? // selected notes use the accent blue (matches the primary button) whether white or gold
                     "bg-[#4285F4] text-white border-[#4285F4]"
@@ -1252,12 +1277,14 @@ function CommitBannerView(props: {
   onDismiss: () => void;
 }) {
   return (
-    <div className="rounded bg-emerald-100 text-emerald-900 dark:bg-emerald-950 dark:text-emerald-100 px-3 py-2 flex justify-between gap-2 items-start">
-      <div>
-        <div className="font-medium">
-          Committed {props.banner.count} note
-          {props.banner.count === 1 ? "" : "s"}.
-        </div>
+    <div className="nt-animate-pop rounded-lg bg-emerald-100 text-emerald-900 dark:bg-emerald-950 dark:text-emerald-100 px-3 py-2 flex justify-between gap-2 items-start">
+      <div className="flex gap-2 items-start">
+        <CheckCircle />
+        <div>
+          <div className="font-medium">
+            Committed {props.banner.count} note
+            {props.banner.count === 1 ? "" : "s"}.
+          </div>
         {props.banner.url && (
           <a
             className="text-xs underline"
@@ -1265,9 +1292,10 @@ function CommitBannerView(props: {
             target="_blank"
             rel="noreferrer"
           >
-            view commit on github
-          </a>
-        )}
+              view commit on github
+            </a>
+          )}
+        </div>
       </div>
       <button
         className="text-xs opacity-70 hover:opacity-100 shrink-0"
@@ -1435,7 +1463,8 @@ function Styles() {
         background: transparent;
         font-weight: 500;
         cursor: pointer;
-        transition: background 0.15s, box-shadow 0.15s, border-color 0.15s;
+        transition: background 0.15s, box-shadow 0.15s, border-color 0.15s,
+          transform 0.08s;
       }
       .nt-btn:hover:not(:disabled) { background: rgba(120,120,120,0.1); }
       .nt-btn:disabled { opacity: 0.5; cursor: not-allowed; }
