@@ -562,6 +562,10 @@ function App() {
                   }
                 }}
                 onGenerate={onGenerate}
+                isVideo={
+                  !s.session?.videoMeta.type ||
+                  s.session.videoMeta.type === "youtube"
+                }
               />
             )}
 
@@ -978,6 +982,7 @@ function TopicPicker(props: {
   onChangeDescription: (d: string) => void;
   onSaveDescription: () => void | Promise<void>;
   onGenerate: () => void;
+  isVideo: boolean;
 }) {
   const hasNewTitle = props.newTopicTitle.trim().length > 0;
   // Show the description editor once a topic is selected (existing) or
@@ -1084,7 +1089,7 @@ function TopicPicker(props: {
         className="nt-btn nt-btn-primary w-full"
         onClick={props.onGenerate}
       >
-        Generate notes from this video
+        {props.isVideo ? "Generate notes from this video" : "Generate notes from this article"}
       </button>
     </div>
   );
