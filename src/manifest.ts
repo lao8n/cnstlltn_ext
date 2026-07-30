@@ -48,7 +48,7 @@ export default defineManifest({
   options_page: "src/options/options.html",
   permissions: ["storage", "sidePanel", "scripting", "activeTab"],
   host_permissions: [
-    "*://*.youtube.com/*",
+    "*://*/*",
     "https://api.github.com/*",
     "https://generativelanguage.googleapis.com/*",
   ],
